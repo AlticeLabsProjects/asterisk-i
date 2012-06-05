@@ -1,0 +1,166 @@
+diff -Naur asterisk_flash/channels/chan_sip.c asterisk_extension_tel/channels/chan_sip.c
+--- asterisk_flash/channels/chan_sip.c	2012-04-12 15:18:46.000000000 +0100
++++ asterisk_extension_tel/channels/chan_sip.c	2012-04-16 11:18:22.000000000 +0100
+@@ -9487,7 +9487,7 @@
+ 		++h;
+ 	else {
+ 		h = uri;
+-		if (!strncasecmp(h, "sip:", 4)) {
++		if (!strncasecmp(h, "sip:", 4) || !strncasecmp(h, "tel:", 4)) {
+ 			h += 4;
+ 		} else if (!strncasecmp(h, "sips:", 5)) {
+ 			h += 5;
+@@ -10138,7 +10138,7 @@
+ 	ast_copy_string(tmpf, str, sizeof(tmpf));
+ 	from = get_in_brackets(tmpf);
+ 	if (!ast_strlen_zero(from)) {
+-		if (strncasecmp(from, "sip:", 4)) {
++		if (strncasecmp(from, "sip:", 4) && strncasecmp(from, "tel:", 4)) {
+ 			ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", from);
+ 			return -1;
+ 		}
+@@ -12992,7 +12992,7 @@
+ 	ast_copy_string(from, of, sizeof(from));
+ 	of = get_in_brackets(from);
+ 	ast_string_field_set(p, from, of);
+-	if (!strncasecmp(of, "sip:", 4)) {
++	if (!strncasecmp(of, "sip:", 4) || !strncasecmp(of, "tel:", 4)) {
+ 		of += 4;
+ 	} else if (!strncasecmp(of, "sips:", 5)) {
+ 		of += 5;
+@@ -13380,7 +13380,7 @@
+ 	 * We still need to be able to send to the remote agent through the proxy.
+ 	 */
+ 
+-	if (parse_uri(contact, "sip:,sips:", &contact, NULL, &domain,
++	if (parse_uri(contact, "sip:,sips:,tel:", &contact, NULL, &domain,
+ 		      &transport)) {
+ 		ast_log(LOG_WARNING, "Invalid contact uri %s (missing sip: or sips:), attempting to use anyway\n", fullcontact);
+ 	}
+@@ -13524,7 +13524,7 @@
+ 	ast_string_field_build(pvt, our_contact, "<%s>", curi);
+ 
+ 	/* Make sure it's a SIP URL */
+-	if (parse_uri(curi, "sip:,sips:", &curi, NULL, &domain, &transport)) {
++	if (parse_uri(curi, "sip:,sips:,tel:", &curi, NULL, &domain, &transport)) {
+ 		ast_log(LOG_NOTICE, "Not a valid SIP contact (missing sip:/sips:) trying to use anyway\n");
+ 	}
+ 
+@@ -14298,7 +14298,7 @@
+ 	c = get_in_brackets(tmp);
+ 	c = remove_uri_parameters(c);
+ 
+-	if (parse_uri(c, "sip:,sips:", &name, &dummy, &domain, NULL)) {
++	if (parse_uri(c, "sip:,sips:,tel:", &name, &dummy, &domain, NULL)) {
+ 		ast_log(LOG_NOTICE, "Invalid to address: '%s' from %s (missing sip:) trying to use anyway...\n", c, ast_sockaddr_stringify_addr(addr));
+ 		return -1;
+ 	}
+@@ -14624,7 +14624,7 @@
+ 		 * blanked?
+ 		 */
+ 		cid_num = (char *)p->cid_num;
+-	} else if (!strncasecmp(start, "sip:", 4)) {
++	} else if (!strncasecmp(start, "sip:", 4) || !strncasecmp(start, "tel:", 4)) {
+ 		cid_num = start + 4;
+ 		if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(cid_num))
+ 			ast_shrink_phone_number(cid_num);
+@@ -14705,7 +14705,7 @@
+ 	if (!end)
+ 		return 0;
+ 	*end++ = '\0';
+-	if (strncasecmp(start, "sip:", 4))
++	if (strncasecmp(start, "sip:", 4) && strncasecmp(start, "tel:", 4))
+ 		return 0;
+ 	cid_num = start + 4;
+ 	if (global_shrinkcallerid && ast_is_shrinkable_phonenumber(cid_num))
+@@ -14780,7 +14780,7 @@
+ 	}
+ 
+ 	exten = get_in_brackets(tmp);
+-	if (!strncasecmp(exten, "sip:", 4)) {
++	if (!strncasecmp(exten, "sip:", 4) || !strncasecmp(exten, "tel:", 4)) {
+ 		exten += 4;
+ 	} else if (!strncasecmp(exten, "sips:", 5)) {
+ 		exten += 5;
+@@ -15042,7 +15042,7 @@
+ 	
+ 	uri = ast_strdupa(get_in_brackets(tmp));
+ 
+-	if (parse_uri(uri, "sip:,sips:", &uri, &dummy, &domain, NULL)) {
++	if (parse_uri(uri, "sip:,sips:,tel:", &uri, &dummy, &domain, NULL)) {
+ 		ast_log(LOG_WARNING, "Not a SIP header (%s)?\n", uri);
+ 		return SIP_GET_DEST_INVALID_URI;
+ 	}
+@@ -15059,7 +15059,7 @@
+ 	ast_copy_string(tmpf, get_header(req, "From"), sizeof(tmpf));
+ 	if (!ast_strlen_zero(tmpf)) {
+ 		from = get_in_brackets(tmpf);
+-		if (parse_uri(from, "sip:,sips:", &from, NULL, &domain, NULL)) {
++		if (parse_uri(from, "sip:,sips:,tel:", &from, NULL, &domain, NULL)) {
+ 			ast_log(LOG_WARNING, "Not a SIP header (%s)?\n", from);
+ 			return SIP_GET_DEST_INVALID_URI;
+ 		}
+@@ -15277,7 +15277,7 @@
+ 	}
+ 	h_refer_to = ast_strdupa(p_refer_to);
+ 	refer_to = get_in_brackets(h_refer_to);
+-	if (!strncasecmp(refer_to, "sip:", 4)) {
++	if (!strncasecmp(refer_to, "sip:", 4) || !strncasecmp(refer_to, "tel:", 4)) {
+ 		refer_to += 4;			/* Skip sip: */
+ 	} else if (!strncasecmp(refer_to, "sips:", 5)) {
+ 		refer_to += 5;
+@@ -15310,7 +15310,7 @@
+ 
+ 		referred_by_uri = get_in_brackets(h_referred_by);
+ 
+-		if (!strncasecmp(referred_by_uri, "sip:", 4)) {
++		if (!strncasecmp(referred_by_uri, "sip:", 4) || !strncasecmp(referred_by_uri, "tel:", 4)) {
+ 			referred_by_uri += 4;		/* Skip sip: */
+ 		} else if (!strncasecmp(referred_by_uri, "sips:", 5)) {
+ 			referred_by_uri += 5;		/* Skip sips: */
+@@ -15462,7 +15462,7 @@
+ 	ast_copy_string(tmp, get_header(req, "Also"), sizeof(tmp));
+ 	c = get_in_brackets(tmp);
+ 
+-	if (parse_uri(c, "sip:,sips:", &c, NULL, &a, NULL)) {
++	if (parse_uri(c, "sip:,sips:,tel:", &c, NULL, &a, NULL)) {
+ 		ast_log(LOG_WARNING, "Huh?  Not a SIP header in Also: transfer (%s)?\n", c);
+ 		return -1;
+ 	}
+@@ -15870,7 +15870,7 @@
+ 
+ 	if (ast_strlen_zero(p->exten)) {
+ 		char *t = uri2;
+-		if (!strncasecmp(t, "sip:", 4))
++		if (!strncasecmp(t, "sip:", 4) || !strncasecmp(t, "tel:", 4))
+ 			t+= 4;
+ 		else if (!strncasecmp(t, "sips:", 5))
+ 			t += 5;
+@@ -15889,7 +15889,7 @@
+ 	ast_string_field_set(p, from, of);
+ 
+ 	/* ignore all fields but name */
+-	if (parse_uri(of, "sip:,sips:", &of, &dummy, &domain, NULL)) {
++	if (parse_uri(of, "sip:,sips:,tel:", &of, &dummy, &domain, NULL)) {
+ 		ast_log(LOG_NOTICE, "From address missing 'sip:', using it anyway\n");
+ 	}
+ 
+@@ -19329,7 +19329,7 @@
+ 
+ 	if (set_call_forward && ast_test_flag(&p->flags[0], SIP_PROMISCREDIR)) {
+ 		char *host = NULL;
+-		if (!strncasecmp(contact_number, "sip:", 4))
++		if (!strncasecmp(contact_number, "sip:", 4) || !strncasecmp(contact_number, "tel:", 4))
+ 			contact_number += 4;
+ 		else if (!strncasecmp(contact_number, "sips:", 5))
+ 			contact_number += 5;
+@@ -19359,7 +19359,7 @@
+ 		if (separator)
+ 			*separator = '\0';
+ 
+-		if (!strncasecmp(contact_number, "sip:", 4))
++		if (!strncasecmp(contact_number, "sip:", 4) || !strncasecmp(contact_number, "tel:", 4))
+ 			contact_number += 4;
+ 		else if (!strncasecmp(contact_number, "sips:", 5))
+ 			contact_number += 5;
+
