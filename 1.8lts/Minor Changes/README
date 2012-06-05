@@ -1,6 +1,11 @@
 Description:
 
-This patch adds support to extension tel in SIP calls.
+This patch adds small changes at code level such as:
+ - In case of a SIP call fails ou gets rejected the SIP channel is destroyed imediately.
+ - Added maximum limit for opening files.
+ - Added new definitions to AST_CAUSES: RESOURCE_UNAVAILABLE, INCOMING_CALL_BARRED_CUG, ONLY_RESTRICTED, SERVICE_NOT_IMPLEMENTED.
+ - Changed the log message when it can't alocate a port to a RTP instance.
+ - Changed the asterisk.logrotate file.
 
 
  1. Get the source for Asterisk 1.8.3.2 from:
