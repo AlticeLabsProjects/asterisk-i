@@ -20,7 +20,7 @@ This module adds support to channel RTSP from the app RTSP already used. It allo
  
  4. Add the channel RTSP
  
- $ patch -p1 -d asterisk-1.8.3.2/ < wms-asterisk-chan.rtsp.patch
+ $ patch -p1 -d asterisk-1.8.3.2/ < wms-asterisk-chan-rtsp.patch
  
  
  5. Build Asterisk
