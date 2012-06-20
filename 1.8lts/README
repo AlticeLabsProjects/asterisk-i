@@ -1,0 +1,5 @@
+Este projecto designa-se por Asterisk-i e pretende juntar as funcionalidades desenvolvidas pela PT Inovação ao Asterisk 1.8.3.2.
+
+Em cada pasta existe um ficheiro patch e um ficheiro README com descrição das funcionalidades que o patch acrescenta, das instruções de compilação e sequencia de instalação.
+
+Cada pasta corresponde a um patch e existe inter-dependencia na instalação dos patches.
