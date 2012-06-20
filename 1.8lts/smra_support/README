@@ -1,0 +1,36 @@
+Description:
+
+This patch adds SMRA (Surf Media Resource Adapter) support module for the Asterisk 1.8.3.2.
+The SMRA adds resource interaction with the hardware from the Surf external media to enable handling the video and audio channels to allow calls using the Surf boards.
+
+
+ 1. Get the source for Asterisk 1.8.3.2 from:
+ 
+ http://downloads.asterisk.org/pub/telephony/asterisk/old-releases/asterisk-1.8.3.2.tar.gz
+ 
+ 
+ 2. Untar the Asterisk 1.8.3.2
+ 
+ $ tar -zxvf asterisk-1.8.3.2.tar.gz
+ 
+ 
+ 3. Add the app WMS to asterisk
+ 
+ $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-app-wms.patch
+ 
+ 
+ 4. Add the codec AMR
+ 
+ $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-codec-amr.patch
+ 
+ 
+ 5. Add the SMRA support
+ 
+ $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-smra-support.patch
+ 
+ 
+ 6. Build Asterisk
+ 
+ $ cd asterisk-1.8.3.2
+ $ ./configure
+ $ make

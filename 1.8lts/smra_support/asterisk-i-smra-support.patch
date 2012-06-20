@@ -1,0 +1,117 @@
+diff -Naur asterisk_com_meetme/channels/chan_local.c asterisk_com_smra/channels/chan_local.c
+--- asterisk_com_meetme/channels/chan_local.c	2012-03-29 14:19:06.000000000 +0100
++++ asterisk_com_smra/channels/chan_local.c	2012-03-30 16:23:30.000000000 +0100
+@@ -422,6 +422,9 @@
+ 	} else {
+ 		ast_log(LOG_WARNING, "Huh?  Local is being asked to answer?\n");
+ 	}
++
++	memcpy(&p->owner->client_smra_attrib, &p->chan->server_smra_attrib, sizeof(p->owner->client_smra_attrib));
++
+ 	ao2_unlock(p);
+ 	ao2_ref(p, -1);
+ 	return res;
+@@ -788,6 +791,25 @@
+ 	ast_connected_line_copy_to_caller(&p->chan->caller, &p->owner->connected);
+ 	ast_connected_line_copy_from_caller(&p->chan->connected, &p->owner->caller);
+ 
++	// Enable Local interface
++	// For this, we need to enable inovox to receive an empty codec call or send client sdp as our capabilities
++	p->chan->cid.cid_ani_url = ast_strdup(p->owner->cid.cid_ani_url);
++	p->chan->cid.cid_asserted_id = ast_strdup(p->owner->cid.cid_ani_url);
++	p->chan->cid.cid_dnis_url = ast_strdup(dest);
++	p->chan->cid.cid_req_uri = ast_strdup(dest);
++
++	if (ast_opt_use_smra)
++	{
++		p->chan->client_sdp_codecs.media[AST_AUDIO_SDP].codec[0].payload = 8;
++	    p->chan->client_sdp_codecs.media[AST_AUDIO_SDP].codec[0].type = AST_FORMAT_ALAW;
++	    p->chan->client_sdp_codecs.media[AST_AUDIO_SDP].num++;
++	    p->chan->client_sdp_codecs.media[AST_VIDEO_SDP].codec[0].payload = 103;
++	    p->chan->client_sdp_codecs.media[AST_VIDEO_SDP].codec[0].type = AST_FORMAT_H263_PLUS;
++	    p->chan->client_sdp_codecs.media[AST_VIDEO_SDP].num++;
++	    memcpy(&p->owner->client_sdp_codecs, &p->chan->client_sdp_codecs, sizeof(p->owner->client_sdp_codecs));
++	    memcpy(&p->chan->client_smra_attrib, &p->owner->server_smra_attrib, sizeof(p->chan->client_smra_attrib));
++	}
++
+ 	ast_string_field_set(p->chan, language, p->owner->language);
+ 	ast_string_field_set(p->chan, accountcode, p->owner->accountcode);
+ 	ast_string_field_set(p->chan, musicclass, p->owner->musicclass);
+diff -Naur asterisk_com_meetme/channels/chan_sip.c asterisk_com_smra/channels/chan_sip.c
+--- asterisk_com_meetme/channels/chan_sip.c	2012-03-29 14:19:06.000000000 +0100
++++ asterisk_com_smra/channels/chan_sip.c	2012-03-30 16:23:30.000000000 +0100
+@@ -6633,6 +6633,14 @@
+ 
+ 	tmp->tech_pvt = dialog_ref(i, "sip_new: set chan->tech_pvt to i");
+ 
++	if (ast_opt_use_smra) // DSP Media
++	{
++		// SMRA Stuff
++	    memcpy(&tmp->client_smra_attrib, &i->client_smra_attrib, sizeof(tmp->client_smra_attrib));
++	    memcpy(&tmp->client_sdp_codecs, &i->client_sdp_codecs, sizeof(tmp->client_sdp_codecs));
++	    memcpy(&tmp->server_sdp_codecs, &i->client_sdp_codecs, sizeof(tmp->server_sdp_codecs));
++	}
++
+ 	tmp->callgroup = i->callgroup;
+ 	tmp->pickupgroup = i->pickupgroup;
+ 	tmp->caller.id.name.presentation = i->callingpres;
+diff -Naur asterisk_com_meetme/channels/sip/include/sip.h asterisk_com_smra/channels/sip/include/sip.h
+--- asterisk_com_meetme/channels/sip/include/sip.h	2012-03-29 14:19:06.000000000 +0100
++++ asterisk_com_smra/channels/sip/include/sip.h	2012-03-30 16:48:49.000000000 +0100
+@@ -179,8 +179,8 @@
+ #define DEFAULT_CONTEXT        "default"  /*!< The default context for [general] section as well as devices */
+ #define DEFAULT_MOHINTERPRET   "default"  /*!< The default music class */
+ #define DEFAULT_MOHSUGGEST     ""
+-#define DEFAULT_VMEXTEN        "asterisk" /*!< Default voicemail extension */
+-#define DEFAULT_CALLERID       "asterisk" /*!< Default caller ID */
++#define DEFAULT_VMEXTEN        "wms" /*!< Default voicemail extension */
++#define DEFAULT_CALLERID       "wms" /*!< Default caller ID */
+ #define DEFAULT_MWI_FROM       ""
+ #define DEFAULT_NOTIFYMIME     "application/simple-message-summary"
+ #define DEFAULT_ALLOWGUEST     TRUE
+@@ -197,7 +197,7 @@
+ #define DEFAULT_COS_VIDEO      6      /*!< Level 2 class of service for video media */
+ #define DEFAULT_COS_TEXT       5      /*!< Level 2 class of service for text media (T.140) */
+ #define DEFAULT_ALLOW_EXT_DOM  TRUE    /*!< Allow external domains */
+-#define DEFAULT_REALM          "asterisk" /*!< Realm for HTTP digest authentication */
++#define DEFAULT_REALM          "wms" /*!< Realm for HTTP digest authentication */
+ #define DEFAULT_DOMAINSASREALM FALSE    /*!< Use the domain option to guess the realm for registration and invite requests */
+ #define DEFAULT_NOTIFYRINGING  TRUE     /*!< Notify devicestate system on ringing state */
+ #define DEFAULT_NOTIFYCID      DISABLED	/*!< Include CID with ringing notifications */
+@@ -212,14 +212,15 @@
+ #define DEFAULT_T1MIN             100   /*!< 100 MS for minimal roundtrip time */
+ #define DEFAULT_MAX_CALL_BITRATE (384)  /*!< Max bitrate for video */
+ #ifndef DEFAULT_USERAGENT
+-#define DEFAULT_USERAGENT  "Asterisk PBX"  /*!< Default Useragent: header unless re-defined in sip.conf */
+-#define DEFAULT_SDPSESSION "Asterisk PBX"  /*!< Default SDP session name, (s=) header unless re-defined in sip.conf */
++#define DEFAULT_USERAGENT  "wms"  /*!< Default Useragent: header unless re-defined in sip.conf */
++#define DEFAULT_SDPSESSION "wms"  /*!< Default SDP session name, (s=) header unless re-defined in sip.conf */
+ #define DEFAULT_SDPOWNER   "root"          /*!< Default SDP username field in (o=) header unless re-defined in sip.conf */
+ #define DEFAULT_ENGINE     "asterisk"      /*!< Default RTP engine to use for sessions */
+ #define DEFAULT_CAPABILITY (AST_FORMAT_ULAW | AST_FORMAT_TESTLAW | AST_FORMAT_ALAW | AST_FORMAT_GSM | AST_FORMAT_H263);
+ #endif
+ #define DEFAULT_AMR_MODE      -1
+ #define DEFAULT_OCTET_ALIGN   TRUE
++#define DEFAULT_VIDEO_SIZE    1  /*! < 1 = CIF */
+ /*@}*/
+ 
+ /*! \name SIPflags
+@@ -1020,7 +1021,16 @@
+ 	int rtptimeout;                     /*!< RTP timeout time */
+ 	struct ast_ha *directmediaha;		/*!< Which IPs are allowed to interchange direct media with this peer - copied from sip_peer */
+ 	struct ast_sockaddr recv;            /*!< Received as */
+-	struct ast_sockaddr ourip;           /*!< Our IP (as seen from the outside) */
++
++	struct ast_sockaddr ourip;
++
++    char url_params[AST_MAX_PARAMS];  /* sip_extended_params support */
++    char ic_extra_data[2048];
++
++    // SMRA
++    AST_SMRA_ATTRIB client_smra_attrib;
++    SDPMedia client_sdp_codecs;
++
+ 	enum transfermodes allowtransfer;   /*!< REFER: restriction scheme */
+ 	struct ast_channel *owner;          /*!< Who owns us (if we have an owner) */
+ 	struct sip_route *route;            /*!< Head of linked list of routing steps (fm Record-Route) */
+
