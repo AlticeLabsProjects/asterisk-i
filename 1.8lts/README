@@ -1,5 +1,5 @@
-Este projecto designa-se por Asterisk-i e pretende juntar as funcionalidades desenvolvidas pela PT Inovação ao Asterisk 1.8.3.2.
+This project's called Asterisk-i and consists of providing the Asterisk 1.8.3.2 features developed by PT Inovação.
 
-Em cada pasta existe um ficheiro patch e um ficheiro README com descrição das funcionalidades que o patch acrescenta, das instruções de compilação e sequencia de instalação.
+Within each folder can be found a patch and a README file with a brief description on the features the patch adds, compilation instructions and instalation sequence.  
 
-Cada pasta corresponde a um patch e existe inter-dependencia na instalação dos patches.
+Each folder contains only a patch and they must be instaled in a determined order specified in the README of each folder.
