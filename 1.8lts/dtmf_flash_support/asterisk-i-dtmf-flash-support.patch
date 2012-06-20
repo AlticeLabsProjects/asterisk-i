@@ -1,0 +1,103 @@
+diff -Naur asterisk_private_extensions/channels/chan_sip.c asterisk_flash/channels/chan_sip.c
+--- asterisk_private_extensions/channels/chan_sip.c	2012-04-09 16:59:00.000000000 +0100
++++ asterisk_flash/channels/chan_sip.c	2012-04-12 15:18:46.000000000 +0100
+@@ -782,6 +782,7 @@
+ static int global_videosize = DEFAULT_VIDEO_SIZE; //CIF
+ static int global_amr_mode = DEFAULT_AMR_MODE;
+ static int global_amr_octetalign = DEFAULT_OCTET_ALIGN;
++static int global_dtmf_flashsupport = 1;
+ static char global_reject_mode[AST_MAX_EXTENSION]; /*! strlen = 0 - ignore SIP OPTIONS, strlen > 0 - responde xx to SIP OPTIONS */
+ /*@}*/
+ 
+@@ -1279,7 +1280,7 @@
+ static int transmit_reinvite_with_sdp(struct sip_pvt *p, int t38version, int oldsdp);
+ static int transmit_info_with_aoc(struct sip_pvt *p, struct ast_aoc_decoded *decoded);
+ static int transmit_info_with_digit(struct sip_pvt *p, const char digit, unsigned int duration);
+-static int transmit_info_with_vidupdate(struct sip_pvt *p);
++//static int transmit_info_with_vidupdate(struct sip_pvt *p);
+ static int transmit_message_with_text(struct sip_pvt *p, const char *text);
+ static int transmit_refer(struct sip_pvt *p, const char *dest);
+ static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs, const char *vmexten);
+@@ -1540,7 +1541,7 @@
+ static int add_text(struct sip_request *req, const char *text);
+ static int add_digit(struct sip_request *req, char digit, unsigned int duration, int mode);
+ static int add_rpid(struct sip_request *req, struct sip_pvt *p);
+-static int add_vidupdate(struct sip_request *req);
++//static int add_vidupdate(struct sip_request *req);
+ static void add_route(struct sip_request *req, struct sip_route *route);
+ static int copy_header(struct sip_request *req, const struct sip_request *orig, const char *field);
+ static int copy_all_header(struct sip_request *req, const struct sip_request *orig, const char *field);
+@@ -6543,7 +6544,7 @@
+ 		break;
+ 	case AST_CONTROL_VIDUPDATE:	/* Request a video frame update */
+ 		if (p->vrtp && !p->novideo) {
+-			transmit_info_with_vidupdate(p);
++			//transmit_info_with_vidupdate(p);
+ 			/* ast_rtcp_send_h261fur(p->vrtp); */
+ 		} else
+ 			res = -1;
+@@ -10357,6 +10358,7 @@
+ 
+ /*! \brief add XML encoded media control with update
+ 	\note XML: The only way to turn 0 bits of information into a few hundred. (markster) */
++/*
+ static int add_vidupdate(struct sip_request *req)
+ {
+ 	const char *xml_is_a_huge_waste_of_space =
+@@ -10373,6 +10375,7 @@
+ 	add_content(req, xml_is_a_huge_waste_of_space);
+ 	return 0;
+ }
++*/
+ 
+ /*! \brief Add codec offer to SDP offer/answer body in INVITE or 200 OK */
+ static void add_codec_to_sdp(const struct sip_pvt *p, format_t codec,
+@@ -10574,7 +10577,13 @@
+ 		       ast_rtp_lookup_mime_subtype2(0, format, 0),
+ 		       ast_rtp_lookup_sample_rate2(0, format));
+ 	if (format == AST_RTP_DTMF)	/* Indicate we support DTMF and FLASH... */
+-		ast_str_append(a_buf, 0, "a=fmtp:%d 0-16\r\n", rtp_code);
++	{
++		if (global_dtmf_flashsupport)
++			ast_str_append(a_buf, 0, "a=fmtp:%d 0-16\r\n", rtp_code);
++	    else
++	        ast_str_append(a_buf, 0, "a=fmtp:%d 0-15\r\n", rtp_code);
++	}
++
+ }
+ 
+ /*! \brief Set all IP media addresses for this call
+@@ -13089,6 +13098,7 @@
+ }
+ 
+ /*! \brief Send SIP INFO with video update request */
++/*
+ static int transmit_info_with_vidupdate(struct sip_pvt *p)
+ {
+ 	struct sip_request req;
+@@ -13097,6 +13107,7 @@
+ 	add_vidupdate(&req);
+ 	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
+ }
++*/
+ 
+ /*! \brief Transmit generic SIP request
+ 	returns XMIT_ERROR if transmit failed with a critical error (don't retry)
+@@ -27442,6 +27453,7 @@
+ 	global_videosize = DEFAULT_VIDEO_SIZE; //CIF
+ 	global_amr_mode = DEFAULT_AMR_MODE;
+ 	global_amr_octetalign = DEFAULT_OCTET_ALIGN;
++	global_dtmf_flashsupport = 1;
+ 
+ 	/* Initialize some reasonable defaults at SIP reload (used both for channel and as default for devices */
+ 	ast_copy_string(sip_cfg.default_context, DEFAULT_CONTEXT, sizeof(sip_cfg.default_context));
+@@ -27975,6 +27987,8 @@
+ 		         }
+ 		      } else if (!strcasecmp(v->name, "amr_octetalign")) { // AMR-NB octet alignment
+ 		         global_amr_octetalign = ast_true(v->value);
++		      } else if (!strcasecmp(v->name, "dtmf_flashsupport")) { // Set flash support
++		         global_dtmf_flashsupport = ast_true(v->value);
+ 		      } else if (!strcasecmp(v->name, "send_ringing")) { // Send 180 Ringing by default
+ 		         ast_set2_flag(&ast_options2, ast_true(v->value), AST_OPT_FLAG2_SEND_RINGING);
+ 		      } else if (!strcasecmp(v->name, "dsp_media")) { // Activate SMRA
+
