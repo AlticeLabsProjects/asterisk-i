@@ -1,0 +1,955 @@
+diff -Naur asterisk_com_reject/channels/chan_sip.c asterisk_com_dif_ips/channels/chan_sip.c
+--- asterisk_com_reject/channels/chan_sip.c	2012-04-04 16:47:53.000000000 +0100
++++ asterisk_com_dif_ips/channels/chan_sip.c	2012-04-09 11:29:23.000000000 +0100
+@@ -1129,15 +1129,19 @@
+  */
+ static int sipsock  = -1;
+ 
+-struct ast_sockaddr bindaddr;	/*!< UDP: The address we bind to */
++struct ast_sockaddr udpbindaddr;	/*!< UDP: The address we bind to */
++
++struct ast_sockaddr rtpbindaddr; /*!< The address we bind to */
+ 
+ /*! \brief our (internal) default address/port to put in SIP/SDP messages
+- *  internip is initialized picking a suitable address from one of the
++ *  internsipip is initialized picking a suitable address from one of the
+  * interfaces, and the same port number we bind to. It is used as the
+  * default address/port in SIP messages, and as the default address
+  * (but not port) in SDP messages.
+  */
+-static struct ast_sockaddr internip;
++static struct ast_sockaddr internsipip;
++
++static struct ast_sockaddr internrtpip;
+ 
+ /*! \brief our external IP address/port for SIP sessions.
+  * externaddr.sin_addr is only set when we know we might be behind
+@@ -1428,6 +1432,7 @@
+ 
+ /*--- Internal UA client handling (outbound registrations) */
+ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us, struct sip_pvt *p);
++static void ast_rtp_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us, struct sip_pvt *p);
+ static void sip_registry_destroy(struct sip_registry *reg);
+ static int sip_register(const char *value, int lineno);
+ static const char *regstate2str(enum sipregistrystate regstate) attribute_const;
+@@ -1892,7 +1897,7 @@
+ 
+ 	sip_pvt_lock(monitor_instance->subscription_pvt);
+ 	create_addr(monitor_instance->subscription_pvt, monitor_instance->peername, 0, 1, NULL);
+-	ast_sip_ouraddrfor(&monitor_instance->subscription_pvt->sa, &monitor_instance->subscription_pvt->ourip, monitor_instance->subscription_pvt);
++	ast_sip_ouraddrfor(&monitor_instance->subscription_pvt->sa, &monitor_instance->subscription_pvt->oursipip, monitor_instance->subscription_pvt);
+ 	monitor_instance->subscription_pvt->subscribed = CALL_COMPLETION;
+ 	monitor_instance->subscription_pvt->expiry = when;
+ 
+@@ -2851,7 +2856,7 @@
+ 	if (!ast_sockaddr_parse(&proxy->ip, proxy->name, 0)) {
+ 		/* Ok, not an IP address, then let's check if it's a domain or host */
+ 		/* XXX Todo - if we have proxy port, don't do SRV */
+-		proxy->ip.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
++		proxy->ip.ss.ss_family = get_address_family_filter(&udpbindaddr); /* Filter address family */
+ 		if (ast_get_ip_or_srv(&proxy->ip, proxy->name, sip_cfg.srvlookup ? "_sip._udp" : NULL) < 0) {
+ 				ast_log(LOG_WARNING, "Unable to locate host '%s'\n", proxy->name);
+ 				return FALSE;
+@@ -3133,7 +3138,7 @@
+ 	/* z9hG4bK is a magic cookie.  See RFC 3261 section 8.1.1.7 */
+ 	snprintf(p->via, sizeof(p->via), "SIP/2.0/%s %s;branch=z9hG4bK%08x%s",
+ 		 get_transport_pvt(p),
+-		 ast_sockaddr_stringify(&p->ourip),
++		 ast_sockaddr_stringify(&p->oursipip),
+ 		 (int) p->branch, rport);
+ }
+ 
+@@ -3141,7 +3146,7 @@
+  *
+  * Using the localaddr structure built up with localnet statements in sip.conf
+  * apply it to their address to see if we need to substitute our
+- * externaddr or can get away with our internal bindaddr
++ * externaddr or can get away with our internal udpbindaddr
+  * 'us' is always overwritten.
+  */
+ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us, struct sip_pvt *p)
+@@ -3162,7 +3167,7 @@
+ 	 */
+ 	int want_remap = 0;
+ 
+-	ast_sockaddr_copy(us, &internip); /* starting guess for the internal address */
++	ast_sockaddr_copy(us, &internsipip); /* starting guess for the internal address */
+ 	/* now ask the system what would it use to talk to 'them' */
+ 	ast_ouraddrfor(them, us);
+ 	ast_sockaddr_copy(&theirs, them);
+@@ -3203,7 +3208,7 @@
+ 				break;
+ 			case SIP_TRANSPORT_UDP:
+ 				if (!ast_sockaddr_port(&externaddr)) {
+-					ast_sockaddr_set_port(us, ast_sockaddr_port(&bindaddr));
++					ast_sockaddr_set_port(us, ast_sockaddr_port(&udpbindaddr));
+ 				}
+ 				break;
+ 			default:
+@@ -3236,19 +3241,85 @@
+ 		case SIP_TRANSPORT_UDP:
+ 			/* fall through on purpose */
+ 		default:
+-			if (!ast_sockaddr_is_any(&bindaddr)) {
+-				ast_sockaddr_copy(us, &bindaddr);
++			if (!ast_sockaddr_is_any(&udpbindaddr)) {
++				ast_sockaddr_copy(us, &udpbindaddr);
+ 			}
+ 			if (!ast_sockaddr_port(us)) {
+-				ast_sockaddr_set_port(us, ast_sockaddr_port(&bindaddr));
++				ast_sockaddr_set_port(us, ast_sockaddr_port(&udpbindaddr));
+ 			}
+ 		}
+-	} else if (!ast_sockaddr_is_any(&bindaddr)) {
+-		ast_sockaddr_copy(us, &bindaddr);
++	} else if (!ast_sockaddr_is_any(&udpbindaddr)) {
++		ast_sockaddr_copy(us, &udpbindaddr);
+ 	}
+ 	ast_debug(3, "Setting SIP_TRANSPORT_%s with address %s\n", get_transport(p->socket.type), ast_sockaddr_stringify(us));
+ }
+ 
++/*! \brief NAT fix - decide which IP address to use for server?
++ *
++ * Using the localaddr structure built up with localnet statements in sip.conf
++ * apply it to their address to see if we need to substitute our
++ * externip or can get away with our internal rtpbindaddr
++ */
++static void ast_rtp_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us, struct sip_pvt *p)
++{
++   struct ast_sockaddr theirs;
++
++   /* Set want_remap to non-zero if we want to remap 'us' to an externally
++    * reachable IP address and port. This is done if:
++    * 1. we have a localaddr list (containing 'internal' addresses marked
++    *    as 'deny', so ast_apply_ha() will return AST_SENSE_DENY on them,
++    *    and AST_SENSE_ALLOW on 'external' ones);
++    * 2. externaddr is set, so we know what to use as the
++    *    externally visible address;
++    * 3. the remote address, 'them', is external;
++    * 4. the address returned by ast_ouraddrfor() is 'internal' (AST_SENSE_DENY
++    *    when passed to ast_apply_ha() so it does need to be remapped.
++    *    This fourth condition is checked later.
++    */
++   int want_remap = 0;
++
++   ast_sockaddr_copy(us, &internrtpip); /* starting guess for the internal address */
++   /* now ask the system what would it use to talk to 'them' */
++   ast_ouraddrfor(them, us);
++   ast_sockaddr_copy(&theirs, them);
++
++   if (ast_sockaddr_is_ipv6(&theirs)) {
++      if (localaddr && !ast_sockaddr_isnull(&externaddr)) {
++         ast_log(LOG_WARNING, "Address remapping activated in sip.conf "
++            "but we're using IPv6, which doesn't need it. Please "
++            "remove \"localnet\" and/or \"externaddr\" settings.\n");
++      }
++   } else {
++      want_remap = localaddr &&
++         !ast_sockaddr_isnull(&externaddr) &&
++         ast_apply_ha(localaddr, &theirs) == AST_SENSE_ALLOW ;
++   }
++
++   if (want_remap &&
++       (!sip_cfg.matchexternaddrlocally || !ast_apply_ha(localaddr, us)) ) {
++      /* if we used externhost, see if it is time to refresh the info */
++      if (externexpire && time(NULL) >= externexpire) {
++         if (ast_sockaddr_resolve_first(&externaddr, externhost, 0)) {
++            ast_log(LOG_NOTICE, "Warning: Re-lookup of '%s' failed!\n", externhost);
++         }
++         externexpire = time(NULL) + externrefresh;
++      }
++      if (!ast_sockaddr_isnull(&externaddr)) {
++         ast_sockaddr_copy(us, &externaddr);
++      }
++      ast_debug(1, "Target address %s is not local, substituting externaddr\n",
++           ast_sockaddr_stringify(them));
++   } else if (p) {
++      /* no remapping, but we bind to a specific address, so use it. */
++      if (!ast_sockaddr_is_any(&rtpbindaddr)) {
++         ast_sockaddr_copy(us, &rtpbindaddr);
++      }
++   } else if (!ast_sockaddr_is_any(&rtpbindaddr)) {
++      ast_sockaddr_copy(us, &rtpbindaddr);
++   }
++   ast_debug(3, "Setting RTP_TRANSPORT with address %s\n", ast_sockaddr_stringify_addr(us));
++}
++
+ /*! \brief Append to SIP dialog history with arg list  */
+ static __attribute__((format(printf, 2, 0))) void append_history_va(struct sip_pvt *p, const char *fmt, va_list ap)
+ {
+@@ -4438,7 +4509,7 @@
+ 						if (ast_sockaddr_resolve(&addrs,
+ 									 tmp->value,
+ 									 PARSE_PORT_FORBID,
+-									 get_address_family_filter(&bindaddr)) <= 0 ||
++									 get_address_family_filter(&udpbindaddr)) <= 0 ||
+ 						    ast_sockaddr_cmp(&addrs[0], addr)) {
+ 							/* No match */
+ 							ast_variables_destroy(var);
+@@ -4791,7 +4862,7 @@
+ 		return 0;
+ 	}
+ 
+-	ast_sockaddr_copy(&bindaddr_tmp, &bindaddr);
++	ast_sockaddr_copy(&bindaddr_tmp, &rtpbindaddr);
+ 	if (!(dialog->rtp = ast_rtp_instance_new(dialog->engine, sched, &bindaddr_tmp, NULL))) {
+ 		return -1;
+ 	}
+@@ -4862,7 +4933,7 @@
+ 	dialog->prefs = peer->prefs;
+ 	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_T38SUPPORT)) {
+ 		/* t38pt_udptl was enabled in the peer and not in [general] */
+-		if (dialog->udptl || (!dialog->udptl && (dialog->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, &bindaddr)))) {
++		if (dialog->udptl || (!dialog->udptl && (dialog->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, &rtpbindaddr)))) {
+ 			dialog->t38_maxdatagram = peer->t38_maxdatagram;
+ 			set_t38_capabilities(dialog);
+ 		} else {
+@@ -5071,7 +5142,7 @@
+ 	if (!dialog->socket.type)
+ 		set_socket_transport(&dialog->socket, SIP_TRANSPORT_UDP);
+ 	if (!dialog->socket.port) {
+-		dialog->socket.port = htons(ast_sockaddr_port(&bindaddr));
++		dialog->socket.port = htons(ast_sockaddr_port(&udpbindaddr));
+ 	}
+ 
+ 	if (!ast_sockaddr_port(&dialog->sa)) {
+@@ -7031,7 +7102,7 @@
+ 	 * use the handy random string generation function we already have
+ 	 */
+ 	ast_str_append(&uri, 0, "%s", generate_random_string(buf, size));
+-	ast_str_append(&uri, 0, "@%s", ast_sockaddr_stringify(&pvt->ourip));
++	ast_str_append(&uri, 0, "@%s", ast_sockaddr_stringify(&pvt->oursipip));
+ 	ast_copy_string(buf, ast_str_buffer(uri), size);
+ 	return buf;
+ }
+@@ -7041,7 +7112,7 @@
+ {
+ 	char buf[33];
+ 
+-	const char *host = S_OR(pvt->fromdomain, ast_sockaddr_stringify(&pvt->ourip));
++	const char *host = S_OR(pvt->fromdomain, ast_sockaddr_stringify(&pvt->oursipip));
+ 	
+ 	ast_string_field_build(pvt, callid, "%s@%s", generate_random_string(buf, sizeof(buf)), host);
+ 
+@@ -7154,10 +7225,12 @@
+ 	}
+ 
+ 	if (!addr) {
+-		p->ourip = internip;
++		p->oursipip = internsipip;
++		p->ourrtpip = internrtpip;
+ 	} else {
+ 		ast_sockaddr_copy(&p->sa, addr);
+-		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
++		ast_sip_ouraddrfor(&p->sa, &p->oursipip, p);
++		ast_rtp_ouraddrfor(&p->sa, &p->ourrtpip, p);
+ 	}
+ 
+ 	/* Copy global flags to this PVT at setup. */
+@@ -7174,7 +7247,7 @@
+ 
+ 	if (sip_methods[intended_method].need_rtp) {
+ 		if (ast_test_flag(&p->flags[1], SIP_PAGE2_T38SUPPORT)) {
+-			if ((p->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, &bindaddr))) {
++			if ((p->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, &rtpbindaddr))) {
+ 				ast_udptl_setqos(p->udptl, global_tos_audio, global_cos_audio);
+ 				p->t38_maxdatagram = global_t38_maxdatagram;
+ 			} else {
+@@ -9792,10 +9865,12 @@
+ 	p->method = intended_method;
+ 
+ 	if (!addr) {
+-		ast_sockaddr_copy(&p->ourip, &internip);
++		ast_sockaddr_copy(&p->oursipip, &internsipip);
++		ast_sockaddr_copy(&p->ourrtpip, &internrtpip);
+ 	} else {
+ 		ast_sockaddr_copy(&p->sa, addr);
+-		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
++		ast_sip_ouraddrfor(&p->sa, &p->oursipip, p);
++		ast_rtp_ouraddrfor(&p->sa, &p->ourrtpip, p);
+ 	}
+ 
+ 	p->branch = ast_random();
+@@ -10038,7 +10113,14 @@
+ static int add_text(struct sip_request *req, const char *text)
+ {
+ 	/* XXX Convert \n's to \r\n's XXX */
+-	add_header(req, "Content-Type", "text/plain;charset=UTF-8");
++	if (strstr(text, "<amsml "))
++      		add_header(req, "Content-Type", "application/amsml+xml");
++   	else if (strstr(text, "<msml "))
++      		add_header(req, "Content-Type", "application/msml+xml");
++   	else if (strstr(text, "<moml "))
++      		add_header(req, "Content-Type", "application/moml+xml");
++   	else add_header(req, "Content-Type", "text/plain;charset=UTF-8");
++
+ 	add_content(req, text);
+ 	return 0;
+ }
+@@ -10107,7 +10189,7 @@
+ 		return 0;
+ 	if (ast_strlen_zero(lid_name))
+ 		lid_name = lid_num;
+-	fromdomain = S_OR(p->fromdomain, ast_sockaddr_stringify_host(&p->ourip));
++	fromdomain = S_OR(p->fromdomain, ast_sockaddr_stringify_host(&p->oursipip));
+ 
+ 	lid_num = ast_uri_encode(lid_num, tmp2, sizeof(tmp2), 1);
+ 
+@@ -10407,7 +10489,7 @@
+ 	/* If our real IP differs from the local address returned by the RTP engine, use it. */
+ 	/* The premise is that if we are already using that IP to communicate with the client, */
+ 	/* we should be using it for RTP too. */
+-        use_externip = ast_sockaddr_cmp_addr(&p->ourip, addr);
++        use_externip = ast_sockaddr_cmp_addr(&p->ourrtpip, addr);
+ 
+ 	/* Now, try to figure out where we want them to send data */
+ 	/* Is this a re-invite to move the media out, then use the original offer from caller  */
+@@ -10428,7 +10510,7 @@
+ 		ast_sockaddr_copy(dest,
+ 				  !ast_sockaddr_isnull(&media_address) ? &media_address :
+ 				  !ast_sockaddr_is_any(addr) && !use_externip ? addr    :
+-				  &p->ourip);
++				  &p->ourrtpip);
+ 		ast_sockaddr_set_port(dest, ast_sockaddr_port(addr));
+ 	}
+ 
+@@ -10451,7 +10533,7 @@
+ 			ast_sockaddr_copy(vdest,
+ 					  !ast_sockaddr_isnull(&media_address) ? &media_address :
+ 					  !ast_sockaddr_is_any(vaddr) && !use_externip ? vaddr  :
+-					  &p->ourip);
++					  &p->ourrtpip);
+ 			ast_sockaddr_set_port(vdest, ast_sockaddr_port(vaddr));
+ 		}
+ 	}
+@@ -10475,7 +10557,7 @@
+ 			ast_sockaddr_copy(tdest,
+ 					  !ast_sockaddr_isnull(&media_address) ? &media_address  :
+ 					  !ast_sockaddr_is_any(taddr) && !use_externip ? taddr   :
+-					  &p->ourip);
++					  &p->ourrtpip);
+ 			ast_sockaddr_set_port(tdest, ast_sockaddr_port(taddr));
+ 		}
+ 	}
+@@ -10639,7 +10721,7 @@
+ 			needaudio = TRUE;
+ 
+ 		if (debug) {
+-			ast_verbose("Audio is at %s\n", ast_sockaddr_stringify_port(&p->ourip));
++			ast_verbose("Audio is at %s port %d\n", ast_sockaddr_stringify_addr(&p->ourrtpip), ast_sockaddr_port(&addr));
+ 		}
+ 
+ 		/* Ok, we need video. Let's add what we need for video and set codecs.
+@@ -10653,7 +10735,7 @@
+ 			if (p->maxcallbitrate)
+ 				snprintf(bandwidth, sizeof(bandwidth), "b=CT:%d\r\n", p->maxcallbitrate);
+ 			if (debug) {
+-				ast_verbose("Video is at %s\n", ast_sockaddr_stringify(&p->ourip));
++				ast_verbose("Video is at %s port %d\n", ast_sockaddr_stringify_addr(&p->ourrtpip), ast_sockaddr_port(&vaddr));
+ 			}
+ 		}
+ 
+@@ -10666,7 +10748,7 @@
+ 			ast_str_append(&m_text, 0, "m=text %d RTP/%s", ast_sockaddr_port(&tdest),
+ 				t_a_crypto ? "SAVP" : "AVP");
+ 			if (debug) {  /* XXX should I use tdest below ? */
+-				ast_verbose("Text is at %s\n", ast_sockaddr_stringify(&p->ourip));
++				ast_verbose("Text is at %s port %d\n", ast_sockaddr_stringify_addr(&p->ourrtpip), ast_sockaddr_port(&taddr));
+ 			}
+ 		}
+ 
+@@ -10766,12 +10848,12 @@
+ 		if (!ast_sockaddr_isnull(&p->udptlredirip)) {
+ 			ast_sockaddr_copy(&udptldest, &p->udptlredirip);
+ 		} else {
+-			ast_sockaddr_copy(&udptldest, &p->ourip);
++			ast_sockaddr_copy(&udptldest, &p->ourrtpip);
+ 			ast_sockaddr_set_port(&udptldest, ast_sockaddr_port(&udptladdr));
+ 		}
+ 
+ 		if (debug) {
+-			ast_debug(1, "T.38 UDPTL is at %s port %d\n", ast_sockaddr_stringify_addr(&p->ourip), ast_sockaddr_port(&udptladdr));
++			ast_debug(1, "T.38 UDPTL is at %s port %d\n", ast_sockaddr_stringify_addr(&p->ourrtpip), ast_sockaddr_port(&udptladdr));
+ 		}
+ 
+ 		/* We break with the "recommendation" and send our IP, in order that our
+@@ -11126,10 +11208,10 @@
+ {
+ 	if (p->socket.type == SIP_TRANSPORT_UDP) {
+ 		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", p->exten,
+-			ast_strlen_zero(p->exten) ? "" : "@", ast_sockaddr_stringify(&p->ourip));
++			ast_strlen_zero(p->exten) ? "" : "@", ast_sockaddr_stringify(&p->oursipip));
+ 	} else {
+ 		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s>", p->exten,
+-			ast_strlen_zero(p->exten) ? "" : "@", ast_sockaddr_stringify(&p->ourip),
++			ast_strlen_zero(p->exten) ? "" : "@", ast_sockaddr_stringify(&p->oursipip),
+ 			get_transport(p->socket.type));
+ 	}
+ }
+@@ -11138,7 +11220,7 @@
+ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, const char * const explicit_uri)
+ {
+ 	struct ast_str *invite = ast_str_alloca(256);
+-	char from[256];
++	char from[256], asserted_id[256];
+ 	char to[256];
+ 	char tmp_n[SIPBUFSIZE/2];	/* build a local copy of 'n' if needed */
+ 	char tmp_l[SIPBUFSIZE/2];	/* build a local copy of 'l' if needed */
+@@ -11148,6 +11230,13 @@
+ 	const char *urioptions = "";
+ 	int ourport;
+ 
++	int extra_headers = 0, i;
++	char header_name[10][128];
++	char header_field[10][256];
++
++	memset(header_name, 0, sizeof(header_name));
++	memset(header_field, 0, sizeof(header_field));
++
+ 	if (ast_test_flag(&p->flags[0], SIP_USEREQPHONE)) {
+ 	 	const char *s = p->username;	/* being a string field, cannot be NULL */
+ 
+@@ -11170,7 +11259,7 @@
+ 
+ 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Init: %s", sip_methods[sipmethod].text);
+ 
+-	d = S_OR(p->fromdomain, ast_sockaddr_stringify_host(&p->ourip));
++	d = S_OR(p->fromdomain, ast_sockaddr_stringify_host(&p->oursipip));
+ 	if (p->owner) {
+ 		if ((ast_party_id_presentation(&p->owner->connected.id) & AST_PRES_RESTRICTION) == AST_PRES_ALLOWED) {
+ 			l = p->owner->connected.id.number.valid ? p->owner->connected.id.number.str : NULL;
+@@ -11216,13 +11305,61 @@
+ 		l = tmp_l;
+ 	}
+ 
+-	ourport = (p->fromdomainport) ? p->fromdomainport : ast_sockaddr_port(&p->ourip);
+-	if (!sip_standard_port(p->socket.type, ourport)) {
+-		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, d, ourport, p->tag);
+-	} else {
+-		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, d, p->tag);
+-	}
++	ourport = (p->fromdomainport) ? p->fromdomainport : ast_sockaddr_port(&p->oursipip);
+ 
++	if (p->owner && !ast_strlen_zero(p->owner->cid.cid_ani_url))
++	   {
++	      // prepare for "teste" <sip:ola@ola.pt>
++	      if (strchr(p->owner->cid.cid_ani_url, '\"'))
++	      {
++	         // if (ourport != STANDARD_SIP_PORT) then WMS must comply with that!
++	         // Build From:
++	         snprintf(from, sizeof(from), "%s;tag=%s", p->owner->cid.cid_ani_url, p->tag);
++	         // Build P-Asserted-Identity
++	         snprintf(asserted_id, sizeof(asserted_id), "%s", p->owner->cid.cid_ani_url);
++	      }
++	      else if (strchr(p->owner->cid.cid_ani_url, '@'))
++	      {
++	         if (!sip_standard_port(p->socket.type, ourport))
++	         {
++	            // Build From:
++	            snprintf(from, sizeof(from), "<sip:%s:%d>;tag=%s", p->owner->cid.cid_ani_url, ourport, p->tag);
++	            // Build P-Asserted-Identity
++	            snprintf(asserted_id, sizeof(asserted_id), "<sip:%s:%d>",
++	               p->owner->cid.cid_ani_url, ourport);
++	         }
++	         else
++	         {
++	            // Build From:
++	            snprintf(from, sizeof(from), "<sip:%s>;tag=%s", p->owner->cid.cid_ani_url, p->tag);
++	            // Build P-Asserted-Identity
++	            snprintf(asserted_id, sizeof(asserted_id), "<sip:%s>", p->owner->cid.cid_ani_url);
++	         }
++	      }
++	      else
++	      {
++	         if (!sip_standard_port(p->socket.type, ourport) && ast_strlen_zero(p->fromdomain))
++	         {
++	            snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, d, ourport, p->tag);
++	            snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s:%d>", n, l, d, ourport);
++	         }
++	         else
++	         {
++	            snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, d, p->tag);
++	            snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s>", n, l, d);
++	         }
++	      }
++	      if (sip_debug_test_pvt(p))
++	         ast_verbose("Setting From: and P-Asserted-Identity: to ANI value %s\n", from);
++	   }
++	   else
++	   {
++	   if (!sip_standard_port(p->socket.type, ourport)) {
++			snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, d, ourport, p->tag);
++		} else {
++			snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, d, p->tag);
++		}
++	}
+ 	if (!ast_strlen_zero(explicit_uri)) {
+ 		ast_str_set(&invite, 0, "%s", explicit_uri);
+ 	} else {
+@@ -11334,11 +11471,11 @@
+ 	if (!pvt->owner->redirecting.from.name.valid
+ 		|| ast_strlen_zero(diverting_name)) {
+ 		snprintf(header_text, sizeof(header_text), "<sip:%s@%s>;reason=%s", diverting_number,
+-				ast_sockaddr_stringify_host(&pvt->ourip), reason);
++				ast_sockaddr_stringify_host(&pvt->oursipip), reason);
+ 	} else {
+ 		snprintf(header_text, sizeof(header_text), "\"%s\" <sip:%s@%s>;reason=%s",
+ 				diverting_name, diverting_number,
+-				ast_sockaddr_stringify_host(&pvt->ourip), reason);
++				ast_sockaddr_stringify_host(&pvt->oursipip), reason);
+ 	}
+ 
+ 	add_header(req, "Diversion", header_text);
+@@ -11363,7 +11500,7 @@
+ 		dialog_unref(pvt, "create_addr failed in transmit_publish. Unref dialog");
+ 		return -1;
+ 	}
+-	ast_sip_ouraddrfor(&pvt->sa, &pvt->ourip, pvt);
++	ast_sip_ouraddrfor(&pvt->sa, &pvt->oursipip, pvt);
+ 	ast_set_flag(&pvt->flags[0], SIP_OUTGOING);
+ 	expires = (publish_type == SIP_PUBLISH_REMOVE) ? 0 : DEFAULT_PUBLISH_EXPIRES;
+ 	pvt->expiry = expires;
+@@ -11578,7 +11715,7 @@
+ 		char transport[MAXHOSTNAMELEN];
+ 		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(mwi->transport), get_srv_protocol(mwi->transport));
+ 
+-		mwi->us.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
++		mwi->us.ss.ss_family = get_address_family_filter(&udpbindaddr); /* Filter address family */
+ 		ast_dnsmgr_lookup(mwi->hostname, &mwi->us, &mwi->dnsmgr, sip_cfg.srvlookup ? transport : NULL);
+ 	}
+ 
+@@ -11631,7 +11768,7 @@
+ 	}
+ 	set_socket_transport(&mwi->call->socket, mwi->transport);
+ 	mwi->call->socket.port = htons(mwi->portno);
+-	ast_sip_ouraddrfor(&mwi->call->sa, &mwi->call->ourip, mwi->call);
++	ast_sip_ouraddrfor(&mwi->call->sa, &mwi->call->oursipip, mwi->call);
+ 	build_contact(mwi->call);
+ 	build_via(mwi->call);
+ 	build_callid_pvt(mwi->call);
+@@ -11964,8 +12101,8 @@
+ {
+ 	struct sip_request req;
+ 	struct ast_str *out = ast_str_alloca(500);
+-	int ourport = (p->fromdomainport) ? p->fromdomainport : ast_sockaddr_port(&p->ourip);
+-	const char *domain = S_OR(p->fromdomain, ast_sockaddr_stringify_host(&p->ourip));
++	int ourport = (p->fromdomainport) ? p->fromdomainport : ast_sockaddr_port(&p->oursipip);
++	const char *domain = S_OR(p->fromdomain, ast_sockaddr_stringify_host(&p->oursipip));
+ 	const char *exten = S_OR(vmexten, default_vmexten);
+ 
+ 	initreqprep(&req, p, SIP_NOTIFY, NULL);
+@@ -12322,7 +12459,7 @@
+ 		char transport[MAXHOSTNAMELEN];
+ 		peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0);
+ 		snprintf(transport, sizeof(transport), "_%s._%s",get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
+-		r->us.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
++		r->us.ss.ss_family = get_address_family_filter(&udpbindaddr); /* Filter address family */
+ 		ast_dnsmgr_lookup(peer ? peer->tohost : r->hostname, &r->us, &r->dnsmgr, sip_cfg.srvlookup ? transport : NULL);
+ 		if (peer) {
+ 			peer = unref_peer(peer, "removing peer ref for dnsmgr_lookup");
+@@ -12341,7 +12478,7 @@
+ 	} else {
+ 		/* Build callid for registration if we haven't registered before */
+ 		if (!r->callid_valid) {
+-			build_callid_registry(r, &internip, default_fromdomain);
++			build_callid_registry(r, &internsipip, default_fromdomain);
+ 			r->callid_valid = TRUE;
+ 		}
+ 		/* Allocate SIP dialog for registration */
+@@ -12432,7 +12569,7 @@
+ 		  based on whether the remote host is on the external or
+ 		  internal network so we can register through nat
+ 		 */
+-		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
++		ast_sip_ouraddrfor(&p->sa, &p->oursipip, p);
+ 		build_contact(p);
+ 	}
+ 
+@@ -14861,12 +14998,12 @@
+ 
+ /*! \brief check received= and rport= in a SIP response.
+  * If we get a response with received= and/or rport= in the Via:
+- * line, use them as 'p->ourip' (see RFC 3581 for rport,
++ * line, use them as 'p->oursipip' (see RFC 3581 for rport,
+  * and RFC 3261 for received).
+  * Using these two fields SIP can produce the correct
+  * address and port in the SIP headers without the need for STUN.
+  * The address part is also reused for the media sessions.
+- * Note that ast_sip_ouraddrfor() still rewrites p->ourip
++ * Note that ast_sip_ouraddrfor() still rewrites p->oursipip
+  * if you specify externaddr/seternaddr/.
+  */
+ static attribute_unused void check_via_response(struct sip_pvt *p, struct sip_request *req)
+@@ -14890,9 +15027,9 @@
+ 		if (!strncmp(cur, "rport=", 6)) {
+ 			int port = strtol(cur+6, NULL, 10);
+ 			/* XXX add error checking */
+-			ast_sockaddr_set_port(&p->ourip, port);
++			ast_sockaddr_set_port(&p->oursipip, port);
+ 		} else if (!strncmp(cur, "received=", 9)) {
+-			if (ast_parse_arg(cur + 9, PARSE_ADDR, &p->ourip))
++			if (ast_parse_arg(cur + 9, PARSE_ADDR, &p->oursipip))
+ 				;	/* XXX add error checking */
+ 		}
+ 	}
+@@ -16978,8 +17115,8 @@
+ 		return CLI_SHOWUSAGE;
+ 	ast_cli(a->fd, "\n\nGlobal Settings:\n");
+ 	ast_cli(a->fd, "----------------\n");
+-	ast_cli(a->fd, "  UDP Bindaddress:        %s\n", ast_sockaddr_stringify(&bindaddr));
+-	if (ast_sockaddr_is_ipv6(&bindaddr) && ast_sockaddr_is_any(&bindaddr)) {
++	ast_cli(a->fd, "  UDP Bindaddress:        %s\n", ast_sockaddr_stringify(&udpbindaddr));
++	if (ast_sockaddr_is_ipv6(&udpbindaddr) && ast_sockaddr_is_any(&udpbindaddr)) {
+ 		ast_cli(a->fd, "  ** Additional Info:\n");
+ 		ast_cli(a->fd, "     [::] may include IPv4 in addition to IPv6, if such a feature is enabled in the OS.\n");
+ 	}
+@@ -16991,6 +17128,7 @@
+ 		default_tls_cfg.enabled != FALSE ?
+ 				ast_sockaddr_stringify(&sip_tls_desc.local_address) :
+ 				"Disabled");
++	ast_cli(a->fd, "  RTP Bindaddress:        %s\n", ast_sockaddr_stringify_addr(&rtpbindaddr));
+ 	ast_cli(a->fd, "  Videosupport:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT)));
+ 	ast_cli(a->fd, "  Textsupport:            %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT)));
+ 	ast_cli(a->fd, "  Ignore SDP sess. ver.:  %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION)));
+@@ -17498,7 +17636,7 @@
+ 			if (ast_sockaddr_isnull(&cur->redirip)) {
+ 				ast_cli(a->fd,
+ 					"  Audio IP:               %s (local)\n",
+-					ast_sockaddr_stringify_addr(&cur->ourip));
++					ast_sockaddr_stringify_addr(&cur->ourrtpip));
+ 			} else {
+ 				ast_cli(a->fd,
+ 					"  Audio IP:               %s (Outside bridge)\n",
+@@ -17777,6 +17915,42 @@
+ 			ast_queue_control(p->owner, AST_CONTROL_VIDUPDATE);
+ 		transmit_response(p, "200 OK", req);
+ 		return;
++	//--- application/msml+xml ----------
++	//--- application/mscml ----------
++   	} else if (!strcasecmp(c, "application/amsml+xml") ||
++              !strcasecmp(c, "application/msml+xml") ||
++              !strcasecmp(c, "application/moml+xml") ||
++              !strcasecmp(c, "application/mscml")) {
++      	char buf[1024];
++
++      	if (get_msg_text(buf, sizeof(buf), req, TRUE))
++      	{
++         ast_log(LOG_WARNING, "Unable to retrieve SIP INFO from %s\n", p->callid);
++         return;
++      	}
++      	if (p->owner)
++      	{
++         struct ast_frame f;
++
++         memset(&f, 0, sizeof(f));
++         f.frametype = AST_FRAME_TEXT;
++         f.subclass.integer = AST_TEXT_XML;
++         f.offset = 0;
++         f.data.ptr = buf;
++         f.datalen = strlen(buf);
++         ast_queue_frame(p->owner, &f);
++      	}
++      	else
++      	{  /* not a PBX call */
++         ast_log(LOG_WARNING,"Received message to %s from %s, dropped it...\n  Content-Type:%s\n  Message: %s\n", get_header(req,"To"), get_header(req,"From"), c, buf);
++         transmit_response(p, "481 Call leg/transaction does not exist", req);
++         //transmit_response(p, "405 Method Not Allowed", req); /* Good enough, or? */
++
++         sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
++         return;
++      	}
++      	transmit_response(p, "200 OK", req);
++      	return;
+ 	} else if (!ast_strlen_zero(c = get_header(req, "X-ClientCode"))) {
+ 		/* Client code (from SNOM phone) */
+ 		if (ast_test_flag(&p->flags[0], SIP_USECLIENTCODE)) {
+@@ -21338,7 +21512,7 @@
+ 		}
+ 		/* If T38 is needed but not present, then make it magically appear */
+ 		if (ast_test_flag(&p->flags[1], SIP_PAGE2_T38SUPPORT) && !p->udptl) {
+-			if ((p->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, &bindaddr))) {
++			if ((p->udptl = ast_udptl_new_with_bindaddr(sched, io, 0, &rtpbindaddr))) {
+ 				p->t38_maxdatagram = global_t38_maxdatagram;
+ 				set_t38_capabilities(p);
+ 			} else {
+@@ -24005,7 +24179,7 @@
+ 	req.socket.fd = sipsock;
+ 	set_socket_transport(&req.socket, SIP_TRANSPORT_UDP);
+ 	req.socket.tcptls_session	= NULL;
+-	req.socket.port = htons(ast_sockaddr_port(&bindaddr));
++	req.socket.port = htons(ast_sockaddr_port(&udpbindaddr));
+ 
+ 	handle_request_do(&req, &addr);
+ 	deinit_req(&req);
+@@ -24382,7 +24556,7 @@
+ 			return 0;
+ 		}
+ 		/* Recalculate our side, and recalculate Call ID */
+-		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
++		ast_sip_ouraddrfor(&p->sa, &p->oursipip, p);
+ 		build_via(p);
+ 		ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
+ 		build_callid_pvt(p);
+@@ -24964,7 +25138,7 @@
+ 		ast_string_field_set(p, tohost, ast_sockaddr_stringify_host(&peer->addr));
+ 
+ 	/* Recalculate our side, and recalculate Call ID */
+-	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
++	ast_sip_ouraddrfor(&p->sa, &p->oursipip, p);
+ 	build_via(p);
+ 	ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
+ 	build_callid_pvt(p);
+@@ -25255,7 +25429,8 @@
+ 	if (ast_strlen_zero(p->peername) && ext)
+ 		ast_string_field_set(p, peername, ext);
+ 	/* Recalculate our side, and recalculate Call ID */
+-	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
++	ast_sip_ouraddrfor(&p->sa, &p->oursipip, p);
++	ast_rtp_ouraddrfor(&p->sa, &p->ourrtpip, p);
+ 	build_via(p);
+ 	ao2_t_unlink(dialogs, p, "About to change the callid -- remove the old name");
+ 	build_callid_pvt(p);
+@@ -26387,7 +26562,7 @@
+ 
+ 		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(peer->socket.type), get_srv_protocol(peer->socket.type));
+ 
+-		peer->addr.ss.ss_family = get_address_family_filter(&bindaddr); /* Filter address family */
++		peer->addr.ss.ss_family = get_address_family_filter(&udpbindaddr); /* Filter address family */
+ 		if (ast_dnsmgr_lookup(_srvlookup, &peer->addr, &peer->dnsmgr, sip_cfg.srvlookup && !peer->portinuri ? transport : NULL)) {
+ 			ast_log(LOG_ERROR, "srvlookup failed for host: %s, on peer %s, removing peer\n", _srvlookup, peer->name);
+ 			unref_peer(peer, "getting rid of a peer pointer");
+@@ -26506,7 +26681,7 @@
+ 	struct ast_flags dummy[2];
+ 	struct ast_flags config_flags = { reason == CHANNEL_MODULE_LOAD ? 0 : ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) ? 0 : CONFIG_FLAG_FILEUNCHANGED };
+ 	int auto_sip_domains = FALSE;
+-	struct ast_sockaddr old_bindaddr = bindaddr;
++	struct ast_sockaddr old_bindaddr = udpbindaddr;
+ 	int registry_count = 0, peer_count = 0, timerb_set = 0, timert1_set = 0;
+ 	int subscribe_network_change = 1;
+ 	time_t run_start, run_end;
+@@ -26611,8 +26786,11 @@
+ 	ast_clear_flag(&global_flags[1], AST_FLAGS_ALL);
+ 
+ 	/* Reset IP addresses  */
+-	ast_sockaddr_parse(&bindaddr, "0.0.0.0:0", 0);
+-	memset(&internip, 0, sizeof(internip));
++	ast_sockaddr_parse(&udpbindaddr, "0.0.0.0:0", 0);
++	memset(&internsipip, 0, sizeof(internsipip));
++
++	ast_sockaddr_parse(&rtpbindaddr, "0.0.0.0:0", 0);
++	memset(&internrtpip, 0, sizeof(internrtpip));
+ 
+ 	/* Free memory for local network address mask */
+ 	ast_free_ha(localaddr);
+@@ -27010,7 +27188,11 @@
+ 		} else if (!strcasecmp(v->name, "registerattempts")) {
+ 			global_regattempts_max = atoi(v->value);
+ 		} else if (!strcasecmp(v->name, "bindaddr") || !strcasecmp(v->name, "udpbindaddr")) {
+-			if (ast_parse_arg(v->value, PARSE_ADDR, &bindaddr)) {
++			if (ast_parse_arg(v->value, PARSE_ADDR, &udpbindaddr)) {
++				ast_log(LOG_WARNING, "Invalid address: %s\n", v->value);
++			}
++		} else if (!strcasecmp(v->name, "rtpbindaddr")) {
++			if (ast_parse_arg(v->value, PARSE_ADDR, &rtpbindaddr)) {
+ 				ast_log(LOG_WARNING, "Invalid address: %s\n", v->value);
+ 			}
+ 		} else if (!strcasecmp(v->name, "localnet")) {
+@@ -27298,32 +27480,45 @@
+  	}
+ 
+ 	if (bindport) {
+-		if (ast_sockaddr_port(&bindaddr)) {
++		if (ast_sockaddr_port(&udpbindaddr)) {
+ 			ast_log(LOG_WARNING, "bindport is also specified in bindaddr. "
+ 				"Using %d.\n", bindport);
+ 		}
+-		ast_sockaddr_set_port(&bindaddr, bindport);
++		ast_sockaddr_set_port(&udpbindaddr, bindport);
+ 	}
+ 
+-	if (!ast_sockaddr_port(&bindaddr)) {
+-		ast_sockaddr_set_port(&bindaddr, STANDARD_SIP_PORT);
++	if (!ast_sockaddr_port(&udpbindaddr)) {
++		ast_sockaddr_set_port(&udpbindaddr, STANDARD_SIP_PORT);
+ 	}
+ 
+ 	/* Set UDP address and open socket */
+-	ast_sockaddr_copy(&internip, &bindaddr);
+-	if (ast_find_ourip(&internip, &bindaddr, 0)) {
++	ast_sockaddr_copy(&internsipip, &udpbindaddr);
++	if (ast_find_ourip(&internsipip, &udpbindaddr, 0)) {
+ 		ast_log(LOG_WARNING, "Unable to get own IP address, SIP disabled\n");
+ 		ast_config_destroy(cfg);
+ 		return 0;
+ 	}
+ 
++	ast_sockaddr_copy(&internrtpip, &rtpbindaddr);
++	if (ast_find_ourip(&internrtpip, &rtpbindaddr, 0)) {
++	   ast_log(LOG_WARNING, "Unable to get own RTP IP address, SIP disabled\n");
++	   ast_config_destroy(cfg);
++	   return 0;
++	}
++	if (ast_sockaddr_is_ipv6(&rtpbindaddr) != ast_sockaddr_is_ipv6(&udpbindaddr))
++	{
++	   ast_log(LOG_WARNING, "RTP and SIP bind addresses differ in family type (IPv6), SIP disabled\n");
++	   ast_config_destroy(cfg);
++	   return 0;
++	}
++
+ 	ast_mutex_lock(&netlock);
+-	if ((sipsock > -1) && (ast_sockaddr_cmp(&old_bindaddr, &bindaddr))) {
++	if ((sipsock > -1) && (ast_sockaddr_cmp(&old_bindaddr, &udpbindaddr))) {
+ 		close(sipsock);
+ 		sipsock = -1;
+ 	}
+ 	if (sipsock < 0) {
+-		sipsock = socket(ast_sockaddr_is_ipv6(&bindaddr) ?
++		sipsock = socket(ast_sockaddr_is_ipv6(&udpbindaddr) ?
+ 				 AF_INET6 : AF_INET, SOCK_DGRAM, 0);
+ 		if (sipsock < 0) {
+ 			ast_log(LOG_WARNING, "Unable to create SIP socket: %s\n", strerror(errno));
+@@ -27340,13 +27535,13 @@
+ 
+ 			ast_enable_packet_fragmentation(sipsock);
+ 
+-			if (ast_bind(sipsock, &bindaddr) < 0) {
++			if (ast_bind(sipsock, &udpbindaddr) < 0) {
+ 				ast_log(LOG_WARNING, "Failed to bind to %s: %s\n",
+-					ast_sockaddr_stringify(&bindaddr), strerror(errno));
++					ast_sockaddr_stringify(&udpbindaddr), strerror(errno));
+ 				close(sipsock);
+ 				sipsock = -1;
+ 			} else {
+-				ast_verb(2, "SIP Listening on %s\n", ast_sockaddr_stringify(&bindaddr));
++				ast_verb(2, "SIP Listening on %s\n", ast_sockaddr_stringify(&udpbindaddr));
+ 				ast_set_qos(sipsock, global_tos_sip, global_cos_sip, "SIP");
+ 			}
+ 		}
+@@ -27358,7 +27553,7 @@
+ 	/* Start TCP server */
+ 	if (sip_cfg.tcp_enabled) {
+ 		if (ast_sockaddr_isnull(&sip_tcp_desc.local_address)) {
+-			ast_sockaddr_copy(&sip_tcp_desc.local_address, &bindaddr);
++			ast_sockaddr_copy(&sip_tcp_desc.local_address, &udpbindaddr);
+ 		}
+ 		if (!ast_sockaddr_port(&sip_tcp_desc.local_address)) {
+ 			ast_sockaddr_set_port(&sip_tcp_desc.local_address, STANDARD_SIP_PORT);
+@@ -27379,7 +27574,7 @@
+ 
+ 	if (ast_ssl_setup(sip_tls_desc.tls_cfg)) {
+ 		if (ast_sockaddr_isnull(&sip_tls_desc.local_address)) {
+-			ast_sockaddr_copy(&sip_tls_desc.local_address, &bindaddr);
++			ast_sockaddr_copy(&sip_tls_desc.local_address, &udpbindaddr);
+ 			ast_sockaddr_set_port(&sip_tls_desc.local_address,
+ 					      STANDARD_TLS_PORT);
+ 		}
+@@ -27508,12 +27703,12 @@
+ 		char temp[MAXHOSTNAMELEN];
+ 
+ 		/* First our default IP address */
+-		if (!ast_sockaddr_isnull(&bindaddr) && !ast_sockaddr_is_any(&bindaddr)) {
+-			add_sip_domain(ast_sockaddr_stringify_addr(&bindaddr),
++		if (!ast_sockaddr_isnull(&udpbindaddr) && !ast_sockaddr_is_any(&udpbindaddr)) {
++			add_sip_domain(ast_sockaddr_stringify_addr(&udpbindaddr),
+ 				       SIP_DOMAIN_AUTO, NULL);
+-		} else if (!ast_sockaddr_isnull(&internip) && !ast_sockaddr_is_any(&internip)) {
++		} else if (!ast_sockaddr_isnull(&internsipip) && !ast_sockaddr_is_any(&internsipip)) {
+ 		/* Our internal IP address, if configured */
+-			add_sip_domain(ast_sockaddr_stringify_addr(&internip),
++			add_sip_domain(ast_sockaddr_stringify_addr(&internsipip),
+ 				       SIP_DOMAIN_AUTO, NULL);
+ 		} else {
+ 			ast_log(LOG_NOTICE, "Can't add wildcard IP address to domain list, please add IP address to domain manually.\n");
+@@ -27521,14 +27716,14 @@
+ 
+ 		/* If TCP is running on a different IP than UDP, then add it too */
+ 		if (!ast_sockaddr_isnull(&sip_tcp_desc.local_address) &&
+-		    !ast_sockaddr_cmp(&bindaddr, &sip_tcp_desc.local_address)) {
++		    !ast_sockaddr_cmp(&udpbindaddr, &sip_tcp_desc.local_address)) {
+ 			add_sip_domain(ast_sockaddr_stringify_addr(&sip_tcp_desc.local_address),
+ 				       SIP_DOMAIN_AUTO, NULL);
+ 		}
+ 
+ 		/* If TLS is running on a different IP than UDP and TCP, then add that too */
+ 		if (!ast_sockaddr_isnull(&sip_tls_desc.local_address) &&
+-		    !ast_sockaddr_cmp(&bindaddr, &sip_tls_desc.local_address) &&
++		    !ast_sockaddr_cmp(&udpbindaddr, &sip_tls_desc.local_address) &&
+ 		    !ast_sockaddr_cmp(&sip_tcp_desc.local_address,
+ 				      &sip_tls_desc.local_address)) {
+ 			add_sip_domain(ast_sockaddr_stringify_addr(&sip_tcp_desc.local_address),
+@@ -27619,6 +27814,16 @@
+ 		return -1;
+ 	}
+ 	sip_pvt_lock(p);
++	while (p->owner && ast_channel_trylock(p->owner)) {
++		sip_pvt_unlock(p);
++		usleep(1);
++	sip_pvt_lock(p);
++	}
++
++	if (!p->owner) {
++		sip_pvt_unlock(p);
++		return 0;
++	}
+ 	if (udptl) {
+ 		ast_udptl_get_peer(udptl, &p->udptlredirip);
+ 	} else {
+@@ -27627,16 +27832,17 @@
+ 	if (!ast_test_flag(&p->flags[0], SIP_GOTREFER)) {
+ 		if (!p->pendinginvite) {
+ 			ast_debug(3, "Sending reinvite on SIP '%s' - It's UDPTL soon redirected to IP %s\n",
+-					p->callid, ast_sockaddr_stringify(udptl ? &p->udptlredirip : &p->ourip));
++					p->callid, ast_sockaddr_stringify(udptl ? &p->udptlredirip : &p->ourrtpip));
+ 			transmit_reinvite_with_sdp(p, TRUE, FALSE);
+ 		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
+ 			ast_debug(3, "Deferring reinvite on SIP '%s' - It's UDPTL will be redirected to IP %s\n",
+-					p->callid, ast_sockaddr_stringify(udptl ? &p->udptlredirip : &p->ourip));
++					p->callid, ast_sockaddr_stringify(udptl ? &p->udptlredirip : &p->ourrtpip));
+ 			ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
+ 		}
+ 	}
+ 	/* Reset lastrtprx timer */
+ 	p->lastrtprx = p->lastrtptx = time(NULL);
++	ast_channel_unlock(p->owner);
+ 	sip_pvt_unlock(p);
+ 	return 0;
+ }
+@@ -27794,12 +28000,12 @@
+ 		if (chan->_state != AST_STATE_UP) {     /* We are in early state */
+ 			if (p->do_history)
+ 				append_history(p, "ExtInv", "Initial invite sent with remote bridge proposal.");
+-			ast_debug(1, "Early remote bridge setting SIP '%s' - Sending media to %s\n", p->callid, ast_sockaddr_stringify(instance ? &p->redirip : &p->ourip));
++			ast_debug(1, "Early remote bridge setting SIP '%s' - Sending media to %s\n", p->callid, ast_sockaddr_stringify(instance ? &p->redirip : &p->ourrtpip));
+ 		} else if (!p->pendinginvite) {	 /* We are up, and have no outstanding invite */
+-			ast_debug(3, "Sending reinvite on SIP '%s' - It's audio soon redirected to IP %s\n", p->callid, ast_sockaddr_stringify(instance ? &p->redirip : &p->ourip));
++			ast_debug(3, "Sending reinvite on SIP '%s' - It's audio soon redirected to IP %s\n", p->callid, ast_sockaddr_stringify(instance ? &p->redirip : &p->ourrtpip));
+ 			transmit_reinvite_with_sdp(p, FALSE, FALSE);
+ 		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
+-			ast_debug(3, "Deferring reinvite on SIP '%s' - It's audio will be redirected to IP %s\n", p->callid, ast_sockaddr_stringify(instance ? &p->redirip : &p->ourip));
++			ast_debug(3, "Deferring reinvite on SIP '%s' - It's audio will be redirected to IP %s\n", p->callid, ast_sockaddr_stringify(instance ? &p->redirip : &p->ourrtpip));
+ 			/* We have a pending Invite. Send re-invite when we're done with the invite */
+ 			ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
+ 		}
+@@ -28239,7 +28445,7 @@
+ static int ast_sockaddr_resolve_first(struct ast_sockaddr *addr,
+ 				      const char* name, int flag)
+ {
+-	return ast_sockaddr_resolve_first_af(addr, name, flag, get_address_family_filter(&bindaddr));
++	return ast_sockaddr_resolve_first_af(addr, name, flag, get_address_family_filter(&udpbindaddr));
+ }
+ 
+ /*! \brief
+diff -Naur asterisk_com_reject/channels/sip/include/sip.h asterisk_com_dif_ips/channels/sip/include/sip.h
+--- asterisk_com_reject/channels/sip/include/sip.h	2012-04-04 16:47:53.000000000 +0100
++++ asterisk_com_dif_ips/channels/sip/include/sip.h	2012-04-05 16:43:29.000000000 +0100
+@@ -1023,7 +1023,8 @@
+ 	struct ast_ha *directmediaha;		/*!< Which IPs are allowed to interchange direct media with this peer - copied from sip_peer */
+ 	struct ast_sockaddr recv;            /*!< Received as */
+ 
+-	struct ast_sockaddr ourip;
++	struct ast_sockaddr oursipip;       /*!< Our SIP IP (as seen from the outside) */
++    struct ast_sockaddr ourrtpip;			/*!< Our RTP IP */
+ 
+     char url_params[AST_MAX_PARAMS];  /* sip_extended_params support */
+     char ic_extra_data[2048];
+
