@@ -1,0 +1,5435 @@
+diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.c
+--- asterisk-1.8.3.2_orig/apps/app_rtsp.c	1970-01-01 01:00:00.000000000 +0100
++++ asterisk-1.8.3.2/apps/app_rtsp.c	2012-03-21 10:59:08.000000000 +0000
+@@ -0,0 +1,2386 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Sergio Garcia Murillo <sergio.garcia@fontventa.com>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ *
++ * \brief MP4 application -- save and play mp4 files
++ * 
++ * \ingroup applications
++ */
++
++#include <asterisk.h>
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <string.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <errno.h>
++
++#include <asterisk/lock.h>
++#include <asterisk/file.h>
++#include <asterisk/logger.h>
++#include <asterisk/channel.h>
++#include <asterisk/pbx.h>
++#include <asterisk/module.h>
++#include <asterisk/utils.h>
++#include <asterisk/translate.h>
++
++#ifndef AST_FORMAT_AMRNB
++#define AST_FORMAT_AMRNB	(1 << 13)
++#endif 
++#ifndef AST_FORMAT_MPEG4
++#define AST_FORMAT_MPEG4        (1 << 22)
++#endif
++
++static char *name_rtsp = "rtsp";
++static char *syn_rtsp = "rtsp player";
++static char *des_rtsp = "  rtsp(url):  Play url. \n";
++
++#define RTSP_NONE		0
++#define RTSP_DESCRIBE		1
++#define RTSP_SETUP_AUDIO 	2
++#define RTSP_SETUP_VIDEO 	3
++#define RTSP_PLAY 		4
++#define RTSP_PLAYING		5
++#define RTSP_RELEASED 		6
++
++#define PKT_PAYLOAD     1450
++#define PKT_SIZE        (sizeof(struct ast_frame) + AST_FRIENDLY_OFFSET + PKT_PAYLOAD)
++#define PKT_OFFSET      (sizeof(struct ast_frame) + AST_FRIENDLY_OFFSET)
++
++
++static struct 
++{
++        format_t format;
++        char* name;
++} mimeTypes[] = {
++	{ AST_FORMAT_G723_1, "G723"},
++	{ AST_FORMAT_GSM, "GSM"},
++	{ AST_FORMAT_ULAW, "PCMU"},
++	{ AST_FORMAT_ALAW, "PCMA"},
++	{ AST_FORMAT_G726, "G726-32"},
++	{ AST_FORMAT_ADPCM, "DVI4"},
++	{ AST_FORMAT_SLINEAR, "L16"},
++	{ AST_FORMAT_LPC10, "LPC"},
++	{ AST_FORMAT_G729A, "G729"},
++	{ AST_FORMAT_SPEEX, "speex"},
++	{ AST_FORMAT_ILBC, "iLBC"},
++	{ AST_FORMAT_G722, "G722"},
++	{ AST_FORMAT_G726_AAL2, "AAL2-G726-32"},
++	{ AST_FORMAT_AMRNB, "AMR"},
++
++    { AST_FORMAT_MPEG4_AUDIO, "MP4A-LATM"},
++    { AST_FORMAT_MPEG4_AUDIO, "AAC"},
++    { AST_FORMAT_MPEG4_AUDIO, "MP4A"},
++
++	{ AST_FORMAT_JPEG, "JPEG"},
++	{ AST_FORMAT_PNG, "PNG"},
++	{ AST_FORMAT_H261, "H261"},
++	{ AST_FORMAT_H263, "H263"},
++	{ AST_FORMAT_H263_PLUS, "H263-1998"},
++	{ AST_FORMAT_H263_PLUS, "H263-2000"},
++	{ AST_FORMAT_H264, "H264"},
++	{ AST_FORMAT_MPEG4, "MP4V-ES"},
++};
++
++typedef enum 
++{
++	RTCP_SR   = 200,
++	RTCP_RR   = 201,
++	RTCP_SDES = 202,
++	RTCP_BYE  = 203,
++	RTCP_APP  = 204
++} RtcpType;
++
++typedef enum 
++{
++	RTCP_SDES_END    =  0,
++	RTCP_SDES_CNAME  =  1,
++	RTCP_SDES_NAME   =  2,
++	RTCP_SDES_EMAIL  =  3,
++	RTCP_SDES_PHONE  =  4,
++	RTCP_SDES_LOC    =  5,
++	RTCP_SDES_TOOL   =  6,
++	RTCP_SDES_NOTE   =  7,
++	RTCP_SDES_PRIV   =  8,
++	RTCP_SDES_IMG    =  9,
++	RTCP_SDES_DOOR   = 10,
++	RTCP_SDES_SOURCE = 11
++} RtcpSdesType;
++
++
++struct RtcpCommonHeader
++{
++	unsigned short count:5;    /* varies by payload type */
++	unsigned short p:1;        /* padding flag */
++	unsigned short version:2;  /* protocol version */
++	unsigned short pt:8;       /* payload type */
++	unsigned short length;   /* packet length in words, without this word */
++};
++
++struct RtcpReceptionReport
++{
++	unsigned int  ssrc;            /* data source being reported */
++	unsigned int fraction:8;       /* fraction lost since last SR/RR */
++	int lost:24;                   /* cumulative number of packets lost (signed!) */
++	unsigned int  last_seq;        /* extended last sequence number received */
++	unsigned int  jitter;          /* interarrival jitter */
++	unsigned int  lsr;             /* last SR packet from this source */
++	unsigned int  dlsr;            /* delay since last SR packet */
++};
++
++struct RtcpSdesItem
++{
++	unsigned char type;             /* type of SDES item (rtcp_sdes_type_t) */
++	unsigned char length;           /* length of SDES item (in octets) */
++	char data[1];                   /* text, not zero-terminated */
++};
++
++struct Rtcp
++{
++	struct RtcpCommonHeader common;    /* common header */
++	union 
++	{
++		/* sender report (SR) */
++		struct
++		{
++			unsigned int ssrc;        /* source this RTCP packet refers to */
++			unsigned int ntp_sec;     /* NTP timestamp */
++			unsigned int ntp_frac;
++			unsigned int rtp_ts;      /* RTP timestamp */
++			unsigned int psent;       /* packets sent */
++			unsigned int osent;       /* octets sent */ 
++			/* variable-length list */
++			struct RtcpReceptionReport rr[1];
++		} sr;
++
++		/* reception report (RR) */
++		struct 
++		{
++			unsigned int ssrc;        /* source this generating this report */
++			/* variable-length list */
++			struct RtcpReceptionReport rr[1];
++		} rr;
++
++		/* BYE */
++		struct 
++		{
++			unsigned int src[1];      /* list of sources */
++			/* can't express trailing text */
++		} bye;
++
++		/* source description (SDES) */
++		struct rtcp_sdes_t 
++		{
++			unsigned int src;              /* first SSRC/CSRC */
++			struct RtcpSdesItem item[1]; /* list of SDES items */
++		} sdes;
++	} r;
++};
++
++struct RtpHeader
++{
++    unsigned int cc:4;        /* CSRC count */
++    unsigned int x:1;         /* header extension flag */
++    unsigned int p:1;         /* padding flag */
++    unsigned int version:2;   /* protocol version */
++    unsigned int pt:7;        /* payload type */
++    unsigned int m:1;         /* marker bit */
++    unsigned int seq:16;      /* sequence number */
++    unsigned int ts;          /* timestamp */
++    unsigned int ssrc;        /* synchronization source */
++    unsigned int csrc[1];     /* optional CSRC list */
++};
++
++struct MediaStats
++{
++	unsigned int count;
++	unsigned int minSN;
++	unsigned int maxSN;
++	unsigned int lastTS;
++	unsigned int ssrc;
++	struct timeval time;
++};
++
++static void MediaStatsReset(struct MediaStats *stats)
++{
++	stats->count 	= 0;
++	stats->minSN 	= 0;
++	stats->maxSN 	= 0;
++	stats->lastTS	= 0;
++	stats->time 	= ast_tvnow();
++}
++
++static void MediaStatsUpdate(struct MediaStats *stats,unsigned int ts,unsigned int sn,unsigned int ssrc)
++{
++	stats->ssrc = ssrc;
++	stats->count++;
++	if (!stats->minSN)
++		stats->minSN = sn;
++	if (stats->maxSN<sn)
++		stats->maxSN = sn;
++	stats->lastTS = ts;
++}
++
++static void MediaStatsRR(struct MediaStats *stats, struct Rtcp *rtcp)
++{
++	/* Set pointer as ssrc */
++	rtcp->r.rr.ssrc = htonl(stats);
++
++	/* data source being reported */
++	rtcp->r.rr.rr[0].ssrc		= htonl(stats->ssrc);
++
++	/* fraction lost since last SR/RR */
++	if (stats->maxSN-stats->minSN>0)
++		rtcp->r.rr.rr[0].fraction	= (signed)(255*stats->count/(stats->maxSN-stats->minSN)); 
++	else
++		rtcp->r.rr.rr[0].fraction       = 0xFF;
++
++	/* cumulative number of packets lost (signed!) */
++	rtcp->r.rr.rr[0].lost		= htonl((signed int)(stats->maxSN-stats->minSN-stats->count));
++
++	/* extended last sequence number received */
++	rtcp->r.rr.rr[0].last_seq	= htonl(stats->maxSN);
++
++	/* interarrival jitter */
++	rtcp->r.rr.rr[0].jitter		= htonl(0xFF);
++
++	/* last SR packet from this source */	
++	rtcp->r.rr.rr[0].lsr		= htonl(stats->lastTS);
++
++	/* delay since last SR packet */
++	rtcp->r.rr.rr[0].dlsr		= htonl(ast_tvdiff_ms(ast_tvnow(),stats->time));
++
++	/* Set common headers */
++	rtcp->common.version	= 2;
++        rtcp->common.p		= 0;
++        rtcp->common.count	= 1;
++        rtcp->common.pt		= 201;
++
++	/* Length */
++	rtcp->common.length = htons(7);
++}
++
++struct RtspPlayer
++{
++	int	fd;
++	int	state;
++	int	cseq;
++	char*	session[2];
++	int 	numSessions;
++	int 	end;
++
++	char*	ip;
++	int 	port;
++	char*	hostport;
++	char*	url;
++	int	isIPv6;
++
++	char*	authorization;
++
++	int	audioRtp;
++	int	audioRtcp;
++	int	videoRtp;
++	int	videoRtcp;
++
++	int	audioRtpPort;
++	int	audioRtcpPort;
++	int	videoRtpPort;
++	int	videoRtcpPort;
++
++	struct 	MediaStats audioStats;
++	struct	MediaStats videoStats;
++};
++
++static struct RtspPlayer* RtspPlayerCreate(void)
++{
++	/* malloc */
++	struct RtspPlayer* player = (struct RtspPlayer*) malloc(sizeof(struct RtspPlayer));
++	/* Initialize */
++	player->cseq 		= 1;
++	player->session[0]	= NULL;
++	player->session[1]	= NULL;
++	player->numSessions	= 0;
++	player->state 		= RTSP_NONE;
++	player->end		= 0;
++	player->ip		= NULL;
++	player->hostport	= NULL;
++	player->isIPv6		= 0;
++	player->port		= 0;
++	player->url		= NULL;
++	player->authorization	= NULL;
++	/* UDP */		
++	player->fd		= 0;
++	player->audioRtp	= 0;
++	player->audioRtcp	= 0;
++	player->videoRtp	= 0;
++	player->videoRtcp	= 0;
++	player->audioRtpPort	= 0;
++	player->audioRtcpPort	= 0;
++	player->videoRtpPort	= 0;
++	player->videoRtcpPort	= 0;
++
++	/* Return */
++	return player;
++}
++
++static void RtspPlayerDestroy(struct RtspPlayer* player)
++{
++	/* free members*/
++	if (player->ip) 	free(player->ip);
++	if (player->hostport) 	free(player->hostport);
++	if (player->url) 	free(player->url);
++	if (player->session[0])	free(player->session[0]);
++	if (player->session[1])	free(player->session[1]);
++	if (player->authorization)	free(player->authorization);
++	/* free */
++	free(player);
++}
++static void RtspPlayerBasicAuthorization(struct RtspPlayer* player,char *username,char *password)
++{
++	char base64[256];
++	char clear[256];
++
++	/* Create authorization header */
++	player->authorization = malloc(128);
++
++	/* Get base 64 from username and password*/
++	sprintf(clear,"%s:%s",username,password);
++
++	/* Encode */
++	ast_base64encode(base64,clear,strlen(clear),256);
++
++	/* Set heather */
++	sprintf(player->authorization, "Authorization: Basic %s",base64);
++}
++
++static void GetUdpPorts(int *a,int *b,int *p,int *q,int isIPv6)
++{
++	struct sockaddr *sendAddr;
++	int size;
++	int len;
++	int PF;
++	unsigned short *port;
++
++	/* If it is ipv6 */
++	if (isIPv6)
++	{
++		/* Set size*/
++		size = sizeof(struct sockaddr_in6);
++		/*Create address */
++		sendAddr = (struct sockaddr *)malloc(size);
++		/* empty addres */
++		memset(sendAddr,0,size);
++		/*Set family */
++		((struct sockaddr_in6*)sendAddr)->sin6_family = AF_INET6;
++		/* Set PF */
++		PF = PF_INET6;
++		/* Get port */
++		port = &(((struct sockaddr_in6 *)sendAddr)->sin6_port);
++	} else {
++		/* Set size*/
++		size = sizeof(struct sockaddr_in);
++		/*Create address */
++		sendAddr = (struct sockaddr *)malloc(size);
++		/* empty addres */
++		memset(sendAddr,0,size);
++		/*Set family */
++		((struct sockaddr_in *)sendAddr)->sin_family = AF_INET;
++		/* Set PF */
++		PF = PF_INET;
++		/* Get port */
++		port = &(((struct sockaddr_in *)sendAddr)->sin_port);
++	}
++
++	/* Create sockets */
++	*a = socket(PF,SOCK_DGRAM,0);
++	bind(*a,sendAddr,size);
++	*b = socket(PF,SOCK_DGRAM,0);
++	bind(*b,sendAddr,size);
++
++	/* Get socket ports */
++	len = size;
++	getsockname(*a,sendAddr,&len);
++	*p = ntohs(*port);
++	len = size;
++	getsockname(*b,sendAddr,&len);
++	*q = ntohs(*port);
++
++	ast_log(LOG_DEBUG,"-GetUdpPorts [%d,%d]\n",*p,*q);
++
++	/* Create audio sockets */
++	while ( *p%2 || *p+1!=*q )
++	{
++		/* Close first */
++		close(*a);
++		/* Move one forward */
++		*a = *b;
++		*p = *q;
++		/* Create new socket */
++		*b = socket(PF,SOCK_DGRAM,0); 
++		/* Get port */
++		if (*p>0)
++			*port = htons(*p+1);
++		else
++			*port = htons(0);
++		bind(*b,sendAddr,size);
++		len = size;
++		getsockname(*b,sendAddr,&len);
++		*q = ntohs(*port);
++
++		ast_log(LOG_DEBUG,"-GetUdpPorts [%d,%d]\n",*p,*q);
++	}
++
++	/* Free Address*/
++	free(sendAddr);
++}
++static void SetNonBlocking(int fd)
++{
++	/* Get flags */
++	int flags = fcntl(fd,F_GETFD);
++
++	/* Set socket non-blocking */
++	fcntl(fd,F_SETFD,flags | O_NONBLOCK);
++}
++
++static struct sockaddr* GetIPAddr(const char *ip, int port,int isIPv6,int *size,int *PF)
++{
++	struct sockaddr * sendAddr;
++
++	/* If it is ipv6 */
++	if (isIPv6)
++	{
++		/* Set size*/
++		*size = sizeof(struct sockaddr_in6);
++		/*Create address */
++		sendAddr = (struct sockaddr *)malloc(*size);
++		/* empty addres */
++		memset(sendAddr,0,*size);
++		/* Set PF */
++		*PF = PF_INET6;
++		/*Set family */
++		((struct sockaddr_in6 *)sendAddr)->sin6_family = AF_INET6;
++		/* Set Address */
++		inet_pton(AF_INET6,ip,&((struct sockaddr_in6*)sendAddr)->sin6_addr);
++		/* Set port */
++		((struct sockaddr_in6 *)sendAddr)->sin6_port = htons(port);
++	} else {
++		/* Set size*/
++		*size = sizeof(struct sockaddr_in);
++		/*Create address */
++		sendAddr = (struct sockaddr *)malloc(*size);
++		/* empty addres */
++		memset(sendAddr,0,*size);
++		/*Set family */
++		((struct sockaddr_in*)sendAddr)->sin_family = AF_INET;
++		/* Set PF */
++		*PF = PF_INET;
++		/* Set Address */
++		((struct sockaddr_in*)sendAddr)->sin_addr.s_addr = inet_addr(ip);
++		/* Set port */
++		((struct sockaddr_in *)sendAddr)->sin_port = htons(port);
++	}
++
++	return sendAddr;
++}
++
++static int RtspPlayerConnect(struct RtspPlayer *player, const char *ip, int port,int isIPv6)
++{
++	struct sockaddr * sendAddr;
++	int size;
++	int PF;
++
++	/* Get send address */
++	sendAddr = GetIPAddr(ip,port,isIPv6,&size,&PF);
++
++	/* open socket */
++	player->fd = socket(PF,SOCK_STREAM,0);
++
++	/* Open audio ports */
++	GetUdpPorts(&player->audioRtp,&player->audioRtcp,&player->audioRtpPort,&player->audioRtcpPort,isIPv6);
++
++	/* Open video ports */
++	GetUdpPorts(&player->videoRtp,&player->videoRtcp,&player->videoRtpPort,&player->videoRtcpPort,isIPv6);
++
++	/* Set non blocking */
++	SetNonBlocking(player->fd);
++	SetNonBlocking(player->audioRtp);
++	SetNonBlocking(player->audioRtcp);
++	SetNonBlocking(player->videoRtp);
++	SetNonBlocking(player->videoRtcp);
++
++	/* Connect */
++	if (connect(player->fd,sendAddr,size)<0)
++	{
++		/* Free mem */
++		free(sendAddr);
++		/* Exit */
++		return 0;
++	}
++
++	/* Set ip v6 */
++	player->isIPv6 = isIPv6;
++
++	/* copy ip & port*/
++	player->ip 	= strdup(ip);
++	player->port 	= port;
++
++	/* create hostport */
++	player->hostport = (char*)malloc(strlen(ip)+8);
++
++	/* If it is ipv6 */
++	if (isIPv6)
++		/* In brakcets */	
++		sprintf(player->hostport,"[%s]",player->ip);
++	else
++		/* normal*/
++		strcpy(player->hostport,player->ip);
++
++	/* If not standard port */
++	if (port!=554)
++		/* Append iot */
++		sprintf(player->hostport,"%s:%d",player->hostport,player->port);
++
++	/* Free mem */
++	free(sendAddr);
++
++	/* conected */
++	return 1;
++}
++static int RtspPlayerAddSession(struct RtspPlayer *player,char *session)
++{
++	int i;
++	char *p;
++
++	/* If max sessions reached */
++	if (player->numSessions == 2)
++		/* Exit */
++		return 0;
++
++	/* Check if it has parameters */
++	if ((p=strchr(session,';'))>0)
++		/* Remove then */
++		*p = 0;
++
++	/* Check if we have that session alreadY */
++	for (i=0;i<player->numSessions;i++)
++		if (strcmp(player->session[i],session)==0)
++		{
++			/* Free */
++			free(session);
++			/* exit */
++			return 0;
++		}
++	/* Save */
++	player->session[player->numSessions++] = session;
++
++	/* exit */
++	return player->numSessions;
++	
++
++}
++
++static void RrspPlayerSetAudioTransport(struct RtspPlayer *player,const char* transport)
++{
++	char *i;
++	int port;
++	struct sockaddr * addr;
++	int size;
++	int PF;
++
++	/* Find server port values */
++	if (!(i=strstr(transport,"server_port=")))
++	{
++		/* Log */
++		ast_log(LOG_DEBUG,"Not server found in transport [%s]\n",transport);
++		/* Exit */
++		return;
++	}
++
++	/* Get to the rtcp port */
++	if (!(i=strstr(i,"-")))
++	{
++		/* Log */
++		ast_log(LOG_DEBUG,"Not rtcp found in transport  [%s]\n",transport);
++		/* exit */
++		return;
++	}	
++
++	/* Get port number */
++	port = atoi(i+1);
++
++	/* Get send address */
++	addr = GetIPAddr(player->ip,port,player->isIPv6,&size,&PF);
++
++	/* Connect */
++	if (connect(player->audioRtcp,addr,size)<0)
++		/* Log */
++		ast_log(LOG_DEBUG,"Could not connect audio rtcp port [%s,%d,%d].%s\n", player->ip,port,errno,strerror(errno));
++
++	/* Free Addr */
++	free(addr);
++
++}
++
++static void RrspPlayerSetVideoTransport(struct RtspPlayer *player,const char* transport)
++{
++	char *i;
++	int port;
++	struct sockaddr * addr;
++	int size;
++	int PF;
++
++	/* Find server port values */
++	if (!(i=strstr(transport,"server_port=")))
++	{
++		/* Log */
++		ast_log(LOG_DEBUG,"Not server found in transport [%s]\n",transport);
++		/* Exit */
++		return;
++	}
++
++	/* Get to the rtcp port */
++	if (!(i=strstr(i,"-")))
++	{
++		/* Log */
++		ast_log(LOG_DEBUG,"Not rtcp found in transport  [%s]\n",transport);
++		/* exit */
++		return;
++	}	
++
++	/* Get port number */
++	port = atoi(i+1);
++
++	/* Get send address */
++	addr = GetIPAddr(player->ip,port,player->isIPv6,&size,&PF);
++
++	/* Connect */
++	if (connect(player->videoRtcp,addr,size)<0)
++		/* Log */
++		ast_log(LOG_DEBUG,"Could not connect video rtcp port [%s,%d,%d].%s\n", player->ip,port,errno,strerror(errno));
++
++	/* Free Addr */
++	free(addr);
++}
++static void RtspPlayerClose(struct RtspPlayer *player)
++{
++	/* Close sockets */
++	if (player->fd)		close(player->fd);
++	if (player->audioRtp)	close(player->audioRtp);
++	if (player->audioRtcp)	close(player->audioRtcp);
++	if (player->videoRtp)	close(player->videoRtp);
++	if (player->videoRtcp)	close(player->videoRtcp);
++}
++
++static int SendRequest(int fd,char *request,int *end)
++{
++	/* Get request len */
++	int len = strlen(request);
++	/* Send request */
++	if (send(fd,request,len,0)==-1)
++	{
++		/* If failed connection*/
++		if (errno!=EAGAIN)
++		{
++			/* log */
++			ast_log(LOG_ERROR,"Error sending request [%d]\n",errno);
++			/* End */
++			*end = 0;
++		}
++		/* exit*/
++		return 0;
++	}
++	/* Return length */
++	return len;
++}
++static int RtspPlayerOptions(struct RtspPlayer *player,const char *url)
++{
++
++        char request[1024];
++
++        /* Log */
++        ast_log(LOG_DEBUG,">OPTIONS [%s]\n",url);
++
++        /* Prepare request */
++        snprintf(request,1024,
++                        "OPTIONS rtsp://%s%s RTSP/1.0\r\n"
++                        "CSeq: %d\r\n"
++                        "Session: %s\r\n"
++                        "User-Agent: app_rtsp\r\n",
++                        player->hostport,url,player->cseq,player->session[player->numSessions-1]);
++
++        /* End request */
++        strcat(request,"\r\n");
++
++        /* Send request */
++        if (!SendRequest(player->fd,request,&player->end))
++                /* exit */
++                return 0;
++	/* Increase player secuence number for request */
++        player->cseq++;
++	/* Log */
++        ast_log(LOG_DEBUG,"<OPTIONS [%s]\n",url);
++        return 1;
++}
++
++
++static int RtspPlayerDescribe(struct RtspPlayer *player,const char *url)
++{
++
++	char request[1024];
++
++	/* Log */
++	ast_log(LOG_DEBUG,">DESCRIBE [%s]\n",url);
++
++	/* Prepare request */
++	snprintf(request,1024,
++			"DESCRIBE rtsp://%s%s RTSP/1.0\r\n"
++			"CSeq: %d\r\n"
++			"Accept: application/sdp\r\n"
++			"User-Agent: app_rtsp\r\n",
++			player->hostport,url,player->cseq);
++
++	/* If we are authorized */
++	if (player->authorization)
++	{
++		/* Append header */
++		strcat(request,player->authorization);
++		/* End line */
++		strcat(request,"\r\n");
++	} 
++
++	/* End request */
++	strcat(request,"\r\n");
++
++	/* Send request */
++	if (!SendRequest(player->fd,request,&player->end))
++		/* exit */
++		return 0;
++	/* Save url */
++	player->url = strdup(url);
++	/* Set state */
++	player->state = RTSP_DESCRIBE;
++	/* Increase seq */
++	player->cseq++;
++	ast_log(LOG_DEBUG,"<DESCRIBE [%s]\n",url);
++	/* ok */
++	return 1;
++}
++
++static int RtspPlayerSetupAudio(struct RtspPlayer* player,const char *url)
++{
++	char request[1024];
++	char sessionheader[256];
++
++	/* Log */
++	ast_log(LOG_DEBUG,"-SETUP AUDIO [%s]\n",url);
++
++	/* if it got session */
++	if (player->numSessions)
++		/* Create header */
++		snprintf(sessionheader,256,"Session: %s\r\n",player->session[player->numSessions-1]);
++	else
++		/* no header */
++		sessionheader[0] = 0;
++
++	/* If it's absolute */
++	if (strncmp(url,"rtsp://",7)==0)
++	{
++		/* Prepare request */
++		snprintf(request,1024,
++				"SETUP %s RTSP/1.0\r\n"
++				"CSeq: %d\r\n"
++				"%s"
++				"Transport: RTP/AVP;unicast;client_port=%d-%d\r\n"
++				"User-Agent: app_rtsp\r\n"
++				"\r\n",
++				url,player->cseq,sessionheader,player->audioRtpPort,player->audioRtcpPort);
++	} else {
++		/* Prepare request */
++		snprintf(request,1024,
++				"SETUP rtsp://%s%s/%s RTSP/1.0\r\n"
++				"CSeq: %d\r\n"
++				"%s"
++				"Transport: RTP/AVP;unicast;client_port=%d-%d\r\n"
++				"User-Agent: app_rtsp\r\n"
++				"\r\n",
++				player->hostport,player->url,url,player->cseq,sessionheader,player->audioRtpPort,player->audioRtcpPort);
++	}
++
++	/* Send request */
++	if (!SendRequest(player->fd,request,&player->end))
++		/* exit */
++		return 0;
++	/* Set state */
++	player->state = RTSP_SETUP_AUDIO;
++	/* Increase seq */
++	player->cseq++;
++	/* ok */
++	return 1;
++}
++
++static int RtspPlayerSetupVideo(struct RtspPlayer* player,const char *url)
++{
++	char request[1024];
++	char sessionheader[256];
++
++	/* Log */
++	ast_log(LOG_DEBUG,"-SETUP VIDEO [%s]\n",url);
++
++	/* if it got session */
++	if (player->numSessions)
++		/* Create header */
++		snprintf(sessionheader,256,"Session: %s\r\n",player->session[player->numSessions-1]);
++	else
++		/* no header */
++		sessionheader[0] = 0;
++
++	/* If it's absolute */
++	if (strncmp(url,"rtsp://",7)==0)
++	{
++		/* Prepare request */
++		snprintf(request,1024,
++				"SETUP %s RTSP/1.0\r\n"
++				"CSeq: %d\r\n"
++				"%s"
++				"Transport: RTP/AVP;unicast;client_port=%d-%d\r\n"
++				"User-Agent: app_rtsp\r\n"
++				"\r\n",
++				url,player->cseq,sessionheader,player->videoRtpPort,player->videoRtcpPort);
++	} else {
++		/* Prepare request */
++		snprintf(request,1024,
++				"SETUP rtsp://%s%s/%s RTSP/1.0\r\n"
++				"CSeq: %d\r\n"
++				"%s"
++				"Transport: RTP/AVP;unicast;client_port=%d-%d\r\n"
++				"User-Agent: app_rtsp\r\n"
++				"\r\n",
++				player->hostport,player->url,url,player->cseq,sessionheader,player->videoRtpPort,player->videoRtcpPort);
++	}
++
++	/* Send request */
++	if (!SendRequest(player->fd,request,&player->end))
++		/* exit */
++		return 0;
++	/* Set state */
++	player->state = RTSP_SETUP_VIDEO;
++	/* Increase seq */
++	player->cseq++;
++	/* ok */
++	return 1;
++}
++
++static int RtspPlayerPlay(struct RtspPlayer* player)
++{
++	char request[1024];
++	int i;
++
++	/* Log */
++	ast_log(LOG_DEBUG,"-PLAY [%s]\n",player->url);
++
++	/* if not session */
++	if (!player->numSessions)
++		/* exit*/
++		return 0;
++
++	/* For each request pipeline */
++	for (i=0;i<player->numSessions;i++)
++	{
++		/* Prepare request */
++		snprintf(request,1024,
++				"PLAY rtsp://%s%s RTSP/1.0\r\n"
++				"CSeq: %d\r\n"
++				"Session: %s\r\n"
++				"User-Agent: app_rtsp\r\n"
++				"\r\n",
++				player->hostport,player->url,player->cseq,player->session[i]);
++
++		/* Send request */
++		if (!SendRequest(player->fd,request,&player->end))
++			/* exit */
++			return 0;
++		/* Increase seq */
++		player->cseq++;
++	}
++	/* Set state */
++	player->state = RTSP_PLAY;
++	/* ok */
++	return 1;
++}
++
++static int RtspPlayerTeardown(struct RtspPlayer* player)
++{
++	char request[1024];
++	int i;
++
++	/* Log */
++	ast_log(LOG_DEBUG,"-TEARDOWN\n");
++
++	/* if not session */
++	if (!player->numSessions)
++		/* exit*/
++		return 0;
++
++	/* For each request pipeline */
++	for (i=0;i<player->numSessions;i++)
++	{
++		/* Prepare request */
++		snprintf(request,1024,
++				"TEARDOWN rtsp://%s%s RTSP/1.0\r\n"
++				"CSeq: %d\r\n"
++				"Session: %s\r\n"
++				"User-Agent: app_rtsp\r\n"
++				"\r\n",
++				player->hostport,player->url,player->cseq,player->session[i]);
++		/* Send request */
++		if (!SendRequest(player->fd,request,&player->end))
++			/* exit */
++			return 0;
++		/* Increase seq */
++		player->cseq++;
++	}
++	/* Set state */
++	player->state = RTSP_RELEASED;
++	/* ok */
++	return 1;
++}
++
++#define RTSP_TUNNEL_CONNECTING 	0
++#define RTSP_TUNNEL_NEGOTIATION 1
++#define RTSP_TUNNEL_RTP 	2
++
++
++struct SDPFormat
++{
++	int 				payload;
++	format_t		format;	
++	char*	control;
++};
++
++struct SDPMedia
++{
++	struct SDPFormat** formats;
++	int num;
++	format_t all;
++};
++
++struct SDPContent
++{
++	struct SDPMedia* audio;
++	struct SDPMedia* video;
++};
++
++static struct SDPMedia* CreateMedia(char *buffer,int bufferLen)
++{
++	int num = 0;
++	int i = 0;
++	struct SDPMedia* media = NULL;;
++
++	/* Count number of spaces*/
++	for (i=0;i<bufferLen;i++)
++		/* If it's a withespace */
++		if (buffer[i]==' ')
++			/* Anopther one */
++			num++;
++
++	/* if no media */
++	if (num<3)
++		/* Exit */
++		return NULL;
++
++	/* Allocate */
++	media = (struct SDPMedia*) malloc(sizeof(struct SDPMedia));
++
++	/* Get number of formats */
++	media->num = num - 2; 
++
++	/* Allocate */
++	media->formats = (struct SDPFormat**) malloc(media->num);
++
++	/* Set all formats to nothing */
++	media->all = 0;
++
++	/* For each format */
++	for (i=0;i<media->num;i++)
++	{
++		/* Allocate format */
++		media->formats[i] = (struct SDPFormat*) malloc(media->num);
++		/* Init params */
++		media->formats[i]->payload 	= -1;
++		media->formats[i]->format 	= 0;
++		media->formats[i]->control 	= NULL;
++	}
++
++	/* log */
++	ast_log(LOG_DEBUG,"-creating media [%d,%s]\n",media->num,strndup(buffer,bufferLen));
++
++	/* Return media */
++	return media;
++}
++
++static void DestroyMedia(struct SDPMedia* media)
++{
++	int i = 0;
++
++	/* Free format */
++	for (i=0;i<media->num;i++)
++	{
++		/* Free control */
++		if (media->formats[i]->control) 
++			free(media->formats[i]->control);
++		/* Free format*/
++		free(media->formats[i]);
++	}
++	/* Free format */
++	free(media->formats);
++	/* Free media */
++	free(media);
++}
++static struct SDPContent* CreateSDP(char *buffer,int bufferLen)
++{
++	struct SDPContent* sdp = NULL;
++	struct SDPMedia* media = NULL;;
++	char *i = buffer;
++	char *j = NULL;
++	char *ini;
++	char *end;
++	int n = 0;
++	int f = 0;
++
++	/* Malloc */
++	sdp = (struct SDPContent*) malloc(sizeof(struct SDPContent));
++
++	/* NO audio and video */
++	sdp->audio = NULL;
++	sdp->video = NULL;
++
++	/* Read each line */
++	while ( (j=strstr(i,"\n")) != NULL && (j<buffer+bufferLen))
++	{
++		/* if it¡s not enougth data */
++		if (j-i<=1)
++			goto next;
++
++		/* If previous is a \r" */
++		if (j[-1]=='\r')
++			/* Decrease end */
++			j--;
++
++		/* log */
++		ast_log(LOG_DEBUG,"-line [%s]\n",strndup(i,j-i));
++
++		/* Check header */
++		if (strncmp(i,"m=",2)==0) 
++		{
++			/* media */
++			if (strncmp(i+2,"video",5)==0)
++			{
++				/* create video */
++				sdp->video = CreateMedia(i,j-i);
++				/* set current media */
++				media = sdp->video;
++			} else if (strncmp(i+2,"audio",5)==0) {
++				/* create video */
++				sdp->audio = CreateMedia(i,j-i);
++				/* set current media */
++				media = sdp->audio;
++			} else 
++				/* no media */
++				media = NULL;
++			/* reset formats */
++			n = 0;
++		} else if (strncmp(i,"a=rtpmap:",9)==0){
++			/* if not in media */
++			if (!media)
++				goto next;
++			/* If more than formats */
++			if (n==media->num)
++				goto next;
++			/* get ini */
++			for (ini=i;ini<j;ini++)
++				/* if it¡s space */
++				if (*ini==' ')
++					break;
++			/* skip space*/
++			if (++ini>=j)
++				goto next;
++			/* get end */
++			for (end=ini;end<j;end++)
++				/* if it¡s space */
++				if (*end=='/')
++					break;
++			/* Check formats */
++			for (f = 0; f < sizeof(mimeTypes)/sizeof(mimeTypes[0]); ++f) 
++				/* If the string is in it */
++				if (strncasecmp(ini,mimeTypes[f].name,end-ini) == 0) 
++				{
++					/* Set type */
++					media->formats[n]->format = mimeTypes[f].format;
++					/* Set payload */
++					media->formats[n]->payload = atoi(i+9);
++					/* Append to all formats */
++					media->all |= media->formats[n]->format;
++					/* Exit */
++					break;
++				}
++			/* Inc medias */
++			n++;
++			
++		} else if (strncmp(i,"a=control:",10)==0){
++			/* if not in media */
++			if (!media)
++				goto next;
++			/* If more than formats */
++			if (n>media->num)
++				goto next;
++			/* If it's previous to the ftmp */
++			if (n==0)
++			{
++				/* Set control for all */
++				for ( f=0; f<media->num; f++)
++					/* Set */
++					media->formats[f]->control = strndup(i+10,j-i-10);
++			} else  {
++				/* if already had control */
++				if (media->formats[n-1]->control)
++					/* Free it */
++					free(media->formats[n-1]->control);
++				/* Get new control */
++			 	media->formats[n-1]->control = strndup(i+10,j-i-10);
++			}
++		}
++next:
++		/* if it's a \r */
++		if (j[0]=='\r')
++			/* skip \r\n to next line */
++			i = j+2;
++		else
++			/* skip \n to next line */
++			i = j+1;
++	}
++
++	/* Return sdp */
++	return sdp;
++}
++
++static void DestroySDP(struct SDPContent* sdp)
++{
++	/* Free medias */
++	if (sdp->audio) DestroyMedia(sdp->audio);
++	if (sdp->video) DestroyMedia(sdp->video);
++	/* Free */
++	free(sdp);
++}
++
++
++static int HasHeader(char *buffer,int bufferLen,char *header)
++{
++	int len;
++	char *i;
++
++	/* Get length */
++	len = strlen(header);
++
++	/* If no header*/
++	if (!len)
++		/* Exit */
++		return 0;
++
++	/* Get Header */
++	i = strcasestr(buffer,header);
++
++	/* If not found or not \r\n first*/
++	if (i<buffer+2)
++		/* Exit */
++		return 0;
++
++	/* If it's not in this request */
++	if (i-buffer>bufferLen)
++		/* Exit */
++		return 0;
++
++	/* Check for \r\n */
++	if (i[-2]!='\r' || i[-1]!='\n')
++		/* Exit */
++		return 0;
++
++	/* Check for ": " */
++	if (i[len]!=':' || i[len+1]!=' ')
++		/* Exit */
++		return 0;
++
++	/* Return value start */
++	return (i-buffer)+len+2;
++}
++
++static int GetResponseCode(char *buffer,int bufferLen)
++{
++	/* check length */
++	if (bufferLen<12)
++		return -1;
++
++	return atoi(buffer+9);
++}
++
++static int GetHeaderValueInt(char *buffer,int bufferLen,char *header)
++{
++	int i;	 
++
++	/* Get start */
++	if (!(i=HasHeader(buffer,bufferLen,header)))
++		/* Exit */
++		return 0;
++
++	/* Return value */
++	return atoi(buffer+i);
++}
++
++static long GetHeaderValueLong(char *buffer,int bufferLen,char *header)
++{
++	int i;	 
++
++	/* Get start */
++	if (!(i=HasHeader(buffer,bufferLen,header)))
++		/* Exit */
++		return 0;
++
++	/* Return value */
++	return atol(buffer+i);
++}
++
++static char* GetHeaderValue(char *buffer,int bufferLen,char *header)
++{
++	int i;	 
++	char *j;
++
++	/* Get start */
++	if (!(i=HasHeader(buffer,bufferLen,header)))
++		/* Exit */
++		return 0;
++	/* Get end */
++	if (!(j=strstr(buffer+i,"\r\n")))
++		/* Exit */
++		return 0;
++
++	/* Return value */
++	return strndup(buffer+i,(j-buffer)-i);
++}
++
++static int CheckHeaderValue(char *buffer,int bufferLen,char *header,char*value)
++{
++	int i;	 
++
++	/* Get start */
++	if (!(i=HasHeader(buffer,bufferLen,header)))
++		/* Exit */
++		return 0;
++
++	/* Return value */
++	return (strncasecmp(buffer+i,value,strlen(value))==0);
++}
++
++
++
++static int RecvResponse(int fd,char *buffer,int *bufferLen,int bufferSize,int *end)
++{
++	/* Read into buffer */
++	int len = recv(fd,buffer,bufferSize-*bufferLen,0);
++
++	/* if error or closed */
++	if (!len>0)
++	{
++		/* If failed connection*/
++		if ((errno!=EAGAIN && errno!=EWOULDBLOCK) || !len)
++		{
++			/* log */
++			ast_log(LOG_ERROR,"Error receiving response [%d,%d].%s\n",len,errno,strerror(errno));
++			/* End */
++			*end = 1;
++		}
++		/* exit*/
++		return 0;
++	} 
++	/* Increase buffer length */
++	*bufferLen += len;
++	/* Finalize as string */
++	buffer[*bufferLen] = 0;
++	/* Return len */
++	return len;
++}
++
++static int GetResponseLen(char *buffer)
++{
++	char *i;
++	/* Search end of response */
++	if ((i=strstr(buffer,"\r\n\r\n"))==NULL)
++		/*Exit*/
++		return 0;
++	/* Get msg leng */
++	return i-buffer+4;
++}
++
++
++static int rtsp_play(struct ast_channel *chan,char *ip, int port, char *url,char *username,char *password,int isIPv6)
++{
++	struct ast_frame *f = NULL;
++	struct ast_frame *sendFrame = NULL;
++
++	int infds[5];
++	int outfd;
++
++	char buffer[16384];
++	int  bufferSize = 16383; /* One less for finall \0 */
++	int  bufferLen = 0;
++	int  responseCode = 0;
++	int  responseLen = 0;
++	int  contentLength = 0;
++	char *rtpBuffer;
++	char rtcpBuffer[PKT_PAYLOAD];
++	int  rtpSize = PKT_PAYLOAD;
++	int  rtcpSize = PKT_PAYLOAD;
++	int  rtpLen = 0;
++	int  rtcpLen = 0;
++	char *session;
++	char *transport;
++	char *range;
++	char *j;
++	char src[128];
++	int  res = 0;
++
++	struct SDPContent* sdp = NULL;
++	char *audioControl = NULL;
++	char *videoControl = NULL;
++	format_t audioFormat = 0;
++	format_t videoFormat = 0;
++	int audioType = 0;
++	int videoType = 0;
++	unsigned int lastVideo = 0;
++	unsigned int lastAudio = 0;
++
++	int duration = 0;
++	int elapsed = 0;
++	int ms = 10000;
++	int i = 0;
++
++	struct RtspPlayer *player;
++	struct RtpHeader *rtp;
++	struct Rtcp rtcp;
++	struct timeval tv = {0,0};
++	struct timeval rtcptv = {0,0};
++
++	/* log */
++	ast_log(LOG_WARNING,">rtsp play\n");
++
++	/* Set random src */
++	sprintf(src,"rtsp_play%08lx", ast_random());
++
++	/* Create player */
++	player = RtspPlayerCreate();
++
++	/* if error */
++	if (!player)
++	{
++		/* log */
++		ast_log(LOG_ERROR,"Couldn't create player\n");
++		/* exit */
++		return 0;
++	}
++
++	/* Connect player */
++	if (!RtspPlayerConnect(player,ip,port,isIPv6))
++	{
++		/* log */
++		ast_log(LOG_ERROR,"Couldn't connect to %s:%d\n",ip,port);
++		/* end */
++		goto rtsp_play_clean;
++	}
++
++	/* Set arrays */
++	infds[0] = player->fd;
++	infds[1] = player->audioRtp;
++	infds[2] = player->videoRtp;
++	infds[3] = player->audioRtcp;
++	infds[4] = player->videoRtcp;
++
++	/* Send request */
++	if (!RtspPlayerDescribe(player,url))
++	{
++		/* log */
++		ast_log(LOG_ERROR,"Couldn't handle DESCRIBE in %s\n",url);
++		/* end */
++		goto rtsp_play_end;
++	}
++
++	/* malloc frame & data */
++	sendFrame = (struct ast_frame *) malloc(PKT_SIZE);
++
++	/* Set data pointer */
++	rtpBuffer = (unsigned char*)sendFrame + PKT_OFFSET;
++
++	/* log */
++	ast_log(LOG_DEBUG,"-rtsp play loop [%d]\n",duration);
++
++	/* Loop */
++	while(!player->end)
++	{
++		/* No output */
++		outfd = -1;
++		/* If the playback has started */
++		if (!ast_tvzero(tv))
++		{
++			/* Get playback time */
++			elapsed = ast_tvdiff_ms(ast_tvnow(),tv); 
++			/* Check how much time have we been playing */
++			if (elapsed>=duration)
++			{
++				/* log */
++				ast_log(LOG_DEBUG,"Playback finished\n");
++				/* exit */
++				player->end = 1;
++				/* Exit */
++				break;
++			} else {
++				/* Set timeout to remaining time*/
++				ms = duration-elapsed;
++			}
++		} else {
++			/* 4 seconds timeout */
++			ms = 4000;
++		}
++
++		/* Read from channels and fd*/
++		if (ast_waitfor_nandfds(&chan,1,infds,5,NULL,&outfd,&ms))
++		{
++			/* Read frame */
++			f = ast_read(chan);
++
++			/* If failed */
++			if (!f) 
++				/* exit */
++				break;
++			
++			/* If it's a control channel */
++			if (f->frametype == AST_FRAME_CONTROL) 
++			{
++				/* Check for hangup */
++				if (f->subclass.integer == AST_CONTROL_HANGUP)
++				{
++					/* log */
++					ast_log(LOG_DEBUG,"-Hangup\n");
++					/* exit */
++					player->end = 1;
++				}
++				
++			 /* If it's a dtmf */
++                        } else if (f->frametype == AST_FRAME_DTMF) {
++				char dtmf[2];
++				/* Get dtmf number */
++				dtmf[0] = f->subclass.integer;
++				dtmf[1] = 0;
++
++				/* Check for dtmf extension in context */
++				if (ast_exists_extension(chan, chan->context, dtmf, 1, NULL)) {
++					/* Set extension to jump */
++					res = f->subclass.integer;
++					/* Free frame */
++					ast_frfree(f);
++					/* exit */
++					goto rstp_play_stop;
++				}
++			}
++
++			/* free frame */
++			ast_frfree(f);
++		} else if (outfd==player->fd) {
++			/* Depending on state */	
++			switch (player->state)
++			{
++				case RTSP_DESCRIBE:
++					/* log */
++					ast_log(LOG_DEBUG,"-Receiving describe\n");
++					/* Read into buffer */
++					if (!RecvResponse(player->fd,buffer,&bufferLen,bufferSize,&player->end))
++						break;
++
++					/* Check for response code */
++					responseCode = GetResponseCode(buffer,bufferLen);
++
++					ast_log(LOG_DEBUG,"-Describe response code [%d]\n",responseCode);
++
++					/* Check unathorized */
++					if (responseCode==401)
++					{
++						/* Check athentication method */
++						if (CheckHeaderValue(buffer,bufferLen,"WWW-Authenticate","Basic realm=\"/\""))
++						{
++							/* Create authentication header */
++							RtspPlayerBasicAuthorization(player,username,password);
++							/* Send again the describe */
++							RtspPlayerDescribe(player,url);
++							/* Enter loop again */
++							break;
++						} else {
++							/* Error */
++							ast_log(LOG_ERROR,"-No Authenticate header found\n");	
++							/* End */
++							player->end = 1;
++							/* Exit */
++							break;
++						}
++					}
++
++					/* On any other erro code */
++					if (responseCode<200 || responseCode>299)
++					{
++						/* End */
++						player->end = 1;
++						/* Exit */
++						break;
++					}
++
++					/* If not reading content */
++					if (contentLength==0)
++					{
++						/* Search end of response */
++						if ( (responseLen=GetResponseLen(buffer)) == 0 )
++							/*Exit*/
++							break;
++
++						/* Does it have content */
++						contentLength = GetHeaderValueInt(buffer,responseLen,"Content-Length");	
++						/* Is it sdp */
++						if (!CheckHeaderValue(buffer,responseLen,"Content-Type","application/sdp"))
++						{
++							/* log */
++							ast_log(LOG_ERROR,"Content-Type unknown\n");
++							/* End */
++							player->end = 1;
++							/* Exit */
++							break;
++						}
++						/* Get new length */
++						bufferLen -= responseLen;
++						/* Move data to begining */
++						memcpy(buffer,buffer+responseLen,bufferLen);
++					}
++					
++					/* If there is not enough data */	
++					if (bufferLen<contentLength) 
++						/* break */
++						break;
++
++					/* Create SDP */
++					sdp = CreateSDP(buffer,contentLength);
++					/* Get new length */
++					bufferLen -= contentLength;
++					/* Move data to begining */
++					memcpy(buffer,buffer+responseLen,bufferLen);
++					/* Reset content */
++					contentLength = 0;
++
++					/* If not sdp */
++					if (!sdp)
++					{
++						/* log */
++						ast_log(LOG_ERROR,"Couldn't parse SDP\n");
++						/* end */
++						player->end = 1;
++						/* exit */
++						break;
++					}
++
++					ast_log(LOG_DEBUG,"-Finding compatible codecs [0x%lx]\n", chan->nativeformats);
++
++					/* Get best audio track */
++					if (sdp->audio)
++					{
++						/* Avoid ovverwriten */
++						format_t cap  = chan->nativeformats | AST_FORMAT_AMRNB;
++
++						/* Get best codec format for audio */
++						format_t best = ast_translator_best_choice(&cap, &sdp->audio->all);
++
++						ast_log(LOG_DEBUG,"-Search best codec for audio [cap:0x%lx,all:0x%lx,best:0x%lx]\n", cap, sdp->audio->all, best);
++
++						/* Check if we have it */
++						if (!(best & sdp->audio->all))
++								/* Get generic best one */
++								best = ast_best_codec(sdp->audio->all);
++						ast_log(LOG_DEBUG,"-Search best codec for audio [cap:0x%lx,all:0x%lx,best:0x%lx]\n", cap, sdp->audio->all, best);
++
++						/* Get first matching format */
++						for (i=0;i<sdp->audio->num;i++)
++						{
++							/* log */
++							ast_log(LOG_DEBUG,"-audio [0x%lx,%d,%s]\n", sdp->audio->formats[i]->format, sdp->audio->formats[i]->payload ,sdp->audio->formats[i]->control);
++							/* if we have that */
++							if (sdp->audio->formats[i]->format == best)
++							{
++								/* Store type */
++								audioType = sdp->audio->formats[i]->payload;
++								/* Store format */
++								audioFormat = sdp->audio->formats[i]->format;
++								/* Store control */
++								audioControl = sdp->audio->formats[i]->control;
++								/* Found best codec */
++								ast_log(LOG_DEBUG,"-Found best audio codec\n");
++								/* Got a valid one */
++								break;
++							}
++						}
++					}
++
++					/* Get best video track */
++					if (sdp->video)
++						/* Get first matching format */
++						for (i=0;i<sdp->video->num;i++)
++						{
++							/* log */
++							ast_log(LOG_DEBUG,"-video [0x%lx,%d,%s]\n", sdp->video->formats[i]->format, sdp->video->formats[i]->payload ,sdp->video->formats[i]->control);
++							/* if we have that */
++							if (sdp->video->formats[i]->format & chan->nativeformats)
++							{
++								/* Store type */
++								videoType = sdp->video->formats[i]->payload;
++								/* Store format */
++								videoFormat = sdp->video->formats[i]->format;
++								/* Store control */
++								videoControl = sdp->video->formats[i]->control;
++								/* Found best codec */
++								ast_log(LOG_DEBUG,"-Found best video codec\n");
++								/* Got a valid one */
++								break;
++							}
++						}
++
++					/* Log formats */
++					ast_log(LOG_DEBUG,"-Set write format [0x%lx,0x%lx,0x%lx]\n", audioFormat | videoFormat, audioFormat, videoFormat);
++
++					/* Set write format */
++					ast_set_write_format(chan, audioFormat | videoFormat);	
++
++
++					/* if audio track */
++					if (audioControl)
++					{
++						/* Open audio */
++						RtspPlayerSetupAudio(player,audioControl);
++					} else if (videoControl) {
++						/* Open video */
++						RtspPlayerSetupVideo(player,videoControl);
++					} else {
++						/* log */
++						ast_log(LOG_ERROR,"No media found\n");
++						/* end */
++						player->end = 1;
++					}
++					break;
++
++				case RTSP_SETUP_AUDIO:
++					/* log */
++					ast_log(LOG_DEBUG,"-Recv audio response\n");
++					/* Read into buffer */
++					if (!RecvResponse(player->fd,buffer,&bufferLen,bufferSize,&player->end))
++						break;
++					/* Search end of response */
++					if ( (responseLen=GetResponseLen(buffer)) == 0 )
++						/*Exit*/
++						break;
++
++					/* Does it have content */
++					if (GetHeaderValueInt(buffer,responseLen,"Content-Length"))
++					{
++						/* log */
++						ast_log(LOG_ERROR,"Content length not expected\n");
++						/* Uh? */
++						player->end = 1;
++						/* break */
++						break;
++					}
++					/* Get session */
++					if ( (session=GetHeaderValue(buffer,responseLen,"Session")) == 0)
++					{
++						/* log */
++						ast_log(LOG_ERROR,"No session [%s]\n",buffer);
++						/* Uh? */
++						player->end = 1;
++						/* break */
++						break;
++					}
++					/* Append session to player */
++					RtspPlayerAddSession(player,session);
++					/* Get transport value to obtain rtcp ports */
++					if ((transport=GetHeaderValue(buffer,responseLen,"Transport")) == 0)
++					{
++						/* log */
++						ast_log(LOG_ERROR,"No transport [%s]\n",buffer);
++						/* Uh? */
++						player->end = 1;
++						/* break */
++						break;
++					}
++					/* Process transport */
++					RrspPlayerSetAudioTransport(player,transport);
++					/* Free string */
++					free(transport);
++					/* Get new length */
++					bufferLen -= responseLen;
++					/* Move data to begining */
++					memcpy(buffer,buffer+responseLen,bufferLen);
++					/* If video control */
++					if (videoControl)
++						/* Set up video */
++						RtspPlayerSetupVideo(player,videoControl);
++					else 
++						/* play */
++						RtspPlayerPlay(player);
++					break;
++				case RTSP_SETUP_VIDEO:
++					/* Read into buffer */
++					if (!RecvResponse(player->fd,buffer,&bufferLen,bufferSize,&player->end))
++						break;
++					/* Search end of response */
++					if ( (responseLen=GetResponseLen(buffer)) == 0 )
++						/*Exit*/
++						break;
++
++					/* Does it have content */
++					if (GetHeaderValueInt(buffer,responseLen,"Content-Length"))
++					{
++						/* log */
++						ast_log(LOG_ERROR,"No content length\n");
++						/* Uh? */
++						player->end = 1;
++						/* break */
++						break;
++					}
++					/* Get session if we don't have already one*/
++					if ( (session=GetHeaderValue(buffer,responseLen,"Session")) == 0)
++					{
++						/* log */
++						ast_log(LOG_ERROR,"No session [%s]\n",buffer);
++						/* Uh? */
++						player->end = 1;
++						/* break */
++						break;
++					}
++					
++					/* Append session to player */
++					RtspPlayerAddSession(player,session);
++					/* Get transport value to obtain rtcp ports */
++					if ((transport=GetHeaderValue(buffer,responseLen,"Transport")) == 0)
++					{
++						/* log */
++						ast_log(LOG_ERROR,"No transport [%s]\n",buffer);
++						/* Uh? */
++						player->end = 1;
++						/* break */
++						break;
++					}
++					/* Process transport */
++					RrspPlayerSetVideoTransport(player,transport);
++					/* Free string */
++					free(transport);
++					/* Get new length */
++					bufferLen -= responseLen;
++					/* Move data to begining */
++					memcpy(buffer,buffer+responseLen,bufferLen);
++					/* Play */
++					RtspPlayerPlay(player);
++					break;
++				case RTSP_PLAY:
++					/* Read into buffer */
++					if (!RecvResponse(player->fd,buffer,&bufferLen,bufferSize,&player->end))
++						break;
++					/* Search end of response */
++					if ( (responseLen=GetResponseLen(buffer)) == 0 )
++						/*Exit*/
++						break;
++					/* Get range */
++					if ( (range=GetHeaderValue(buffer,responseLen,"Range")) == 0)
++					{
++						/* No end of stream */
++						duration = -1;
++					} else {
++						/* Get end part */
++						j = strchr(range,'-');
++						/* Check format */
++						if (j)
++							/* Get duration */
++							duration = atof(j+1)*1000;  
++						else 
++							/* No end of stream */
++							duration = -1;
++						/* Free string */
++						free(range);
++					}
++					/* If the video has end */
++					if (duration>0)
++						/* Init counter */
++						tv = ast_tvnow();
++					/* log */
++					ast_log(LOG_DEBUG,"-Started playback [%d]\n",duration);
++					/* Get new length */
++					bufferLen -= responseLen;
++					/* Move data to begining */
++					memcpy(buffer,buffer+responseLen,bufferLen);
++					/* Init media stats */
++					MediaStatsReset(&player->audioStats);
++					MediaStatsReset(&player->videoStats);
++					/* Set playing state */
++					player->state = RTSP_PLAYING;
++					break;
++				case RTSP_PLAYING:
++					/* Read into buffer */
++					if (!RecvResponse(player->fd,buffer,&bufferLen,bufferSize,&player->end))
++						break;
++					break;
++			}
++		} else if ((outfd==player->audioRtp) ||  (outfd==player->videoRtp) ) {
++			/* Set length */
++			rtpLen = 0;
++			
++			/* Clean frame */
++			memset(sendFrame,0,sizeof(struct ast_frame) + rtpSize);
++
++
++			/* Read rtp packet */
++			if (!RecvResponse(outfd,rtpBuffer,&rtpLen,rtpSize,&player->end))
++			{
++				/* log */
++				ast_log(LOG_DEBUG,"-Error reading rtp from [%d]\n",outfd);
++				/* exit*/
++				break;
++			}
++
++			/* If not got enought data */
++			if (rtpLen<12)
++				/*exit*/
++				break;
++
++			/* Get headers */
++			rtp = (struct RtpHeader*)rtpBuffer;
++
++			/* Set data ini */
++			int ini = sizeof(struct RtpHeader)-4;
++
++			/* Increase length */
++			ini += rtp->cc;
++
++			/* Get timestamp */
++			unsigned int ts = ntohl(rtp->ts);
++			 
++			/* Set frame data */
++			AST_FRAME_SET_BUFFER(sendFrame,rtpBuffer,ini,rtpLen-ini);
++			sendFrame->src = strdup(src);
++
++			/* Depending on socket */
++			if (outfd==player->audioRtp) {
++				/* Set type */
++				sendFrame->frametype = AST_FRAME_VOICE;
++				sendFrame->subclass.codec =  audioFormat;
++				/* Set number of samples */
++				if (lastAudio)
++					/* Set number of samples */
++					sendFrame->samples = ts-lastAudio;
++				else
++					/* Set number of samples to 160 */
++					sendFrame->samples = 160;
++				/* Save ts */
++				lastAudio = ts;
++				/* Set stats */
++				MediaStatsUpdate(&player->audioStats,ts,ntohs(rtp->seq),ntohl(rtp->ssrc));
++			} else {
++				/* Set type */
++				sendFrame->frametype = AST_FRAME_VIDEO;
++				sendFrame->subclass.codec = videoFormat;
++				/* If not the first */
++				if (lastVideo)
++					/* Set number of samples */
++					sendFrame->samples = ts-lastVideo;
++				else
++					/* Set number of samples to 0 */
++					sendFrame->samples = 0;
++				/* Save ts */
++				lastVideo = ts;
++				/* Set mark */
++				sendFrame->subclass.codec |= rtp->m;
++				/* Set stats */
++				MediaStatsUpdate(&player->videoStats,ts,ntohs(rtp->seq),ntohl(rtp->ssrc));
++			}
++
++			/* Rest */
++			sendFrame->delivery.tv_usec = 0;
++			sendFrame->delivery.tv_sec = 0;
++			/* Don't free the frame outside */
++			sendFrame->mallocd = 0;
++			/* Send frame */
++			ast_write(chan,sendFrame);
++
++		} else if ((outfd==player->audioRtcp) || (outfd==player->videoRtcp)) {
++			/* Set length */
++			rtcpLen = 0;
++			i = 0;
++			
++			/* Read rtcp packet */
++			if (!RecvResponse(outfd,rtcpBuffer,&rtcpLen,rtcpSize,&player->end))
++			{
++				/* log */
++				ast_log(LOG_DEBUG,"-Error reading rtcp from [%d]\n",outfd);
++				/* exit*/
++				break;
++			}
++
++			/* Process rtcp packets */
++			while(i<rtcpLen)
++			{
++				/* Get packet */
++				struct Rtcp *rtcpRecv = (struct Rtcp*)(rtcpBuffer+i);
++				/* Increase pointer */
++				i += (ntohs(rtcpRecv->common.length)+1)*4;
++				/* Check for bye */
++				if (rtcpRecv->common.pt == RTCP_BYE)
++				{
++					/* End playback */
++					player->end = 1;
++					/* exit */	
++					break;
++				}
++			}
++			/* Send corresponding report */
++			if (outfd==player->audioRtcp) {
++				/* Create rtcp packet */
++				MediaStatsRR(&player->audioStats,&rtcp);
++				/* Reset media */
++				MediaStatsReset(&player->audioStats);
++				/* Send packet */
++     				send(player->audioRtcp, &rtcp, (rtcp.common.length+1)*4, 0);
++				/* log */
++				ast_log(LOG_DEBUG,"-Sent rtcp audio report [%d]\n",errno); 
++			} else {
++				/* Create rtcp packet */
++				MediaStatsRR(&player->videoStats,&rtcp);
++				/* Reset media */
++				MediaStatsReset(&player->videoStats);
++				/* Send packet */
++     				send(player->videoRtcp, &rtcp, (rtcp.common.length+1)*4, 0);
++				/* log */
++				ast_log(LOG_DEBUG,"-Sent rtcp video report [%d]\n",errno); 
++			}
++		} else if (player->state!=RTSP_PLAYING) {
++			/* log */
++			ast_log(LOG_ERROR,"-timedout and not conected [%d]",outfd);
++			/* Exit f timedout and not conected*/
++			player->end = 1;
++		} 
++
++		/* If the playback has started */
++		if (player->state==RTSP_PLAYING) 
++		{
++			/* If is not the first one */
++			if (!ast_tvzero(rtcptv))
++			{
++				/* Check Rtcp timeout */
++				if (ast_tvdiff_ms(ast_tvnow(),rtcptv)>10000)
++				{
++					/* If got audio */
++					if (player->audioRtcp>0)
++					{
++						/* Create rtcp packet */
++						MediaStatsRR(&player->audioStats,&rtcp);
++						/* Reset media */
++						MediaStatsReset(&player->audioStats);
++						/* Send packet */
++						send(player->audioRtcp, &rtcp, (rtcp.common.length+1)*4, 0);
++						/* log */
++						ast_log(LOG_DEBUG,"-Sent rtcp audio report [%d]\n",errno); 
++					}
++					/* If got audio */
++					if (player->videoRtcp>0)
++					{
++						/* Create rtcp packet */
++						MediaStatsRR(&player->videoStats,&rtcp);
++						/* Reset media */
++						MediaStatsReset(&player->videoStats);
++						/* Send packet */
++						send(player->videoRtcp, &rtcp, (rtcp.common.length+1)*4, 0);
++						/* log */
++						ast_log(LOG_DEBUG,"-Sent rtcp video report [%d]\n",errno); 
++					}
++					/* Send OPTIONS */
++                                        RtspPlayerOptions(player,url);
++					/* log */
++					ast_log(LOG_DEBUG,"-Sending OPTIONS and reseting RTCP timer\n");
++					/* Reset timeout value */
++					rtcptv = ast_tvnow();
++				}
++			} else {
++				/* log */
++				ast_log(LOG_DEBUG,"-Init RTCP timer\n");
++				/* Init timeout value */
++				rtcptv = ast_tvnow();
++			}
++		}
++	}
++
++rstp_play_stop:
++
++	/* log */
++	ast_log(LOG_DEBUG,"-rtsp_play end loop [%d]\n",res);
++
++	/* Send teardown if something was setup */
++	if (player->state>RTSP_DESCRIBE)
++		/* Teardown */
++		RtspPlayerTeardown(player);
++
++	/* Free frame */
++	if (sendFrame)
++		/* Free memory */
++		free(sendFrame);
++
++	/* If ther was a sdp */
++	if (sdp)
++		/* Destroy it */
++		DestroySDP(sdp);
++
++rtsp_play_clean:
++	/* Close socket */
++	RtspPlayerClose(player);
++
++rtsp_play_end:
++	/* Destroy player */
++	RtspPlayerDestroy(player);
++
++	/* log */
++	ast_log(LOG_WARNING,"<rtsp_play\n");
++
++	/* Exit */	
++	return res;
++}
++
++static int rtsp_tunnel(struct ast_channel *chan,char *ip, int port, char *url)
++{
++	struct sockaddr_in sendAddr;
++	struct ast_frame *f;
++
++	int infds[1];
++	int outfd;
++	int rtsp;
++
++	int state = RTSP_TUNNEL_CONNECTING;
++	char request[1024];
++	char buffer[16384];
++	int  bufferSize = 16383; /* One less for finall \0 */
++	int  bufferLen = 0;
++	int  responseLen = 0;
++	int  contentLength = 0;
++
++	struct SDPContent* sdp = NULL;
++	int  isSDP = 0;
++
++	int end = 0;
++	int ms = 10000;
++	int flags;
++
++
++	/* open socket */
++	rtsp = socket(PF_INET,SOCK_STREAM,0);
++
++	/* empty addres */
++	memset(&sendAddr,0,sizeof(struct sockaddr_in));
++
++	/* Set data */
++	sendAddr.sin_family	 = AF_INET;
++	sendAddr.sin_addr.s_addr = INADDR_ANY;
++	sendAddr.sin_addr.s_addr = inet_addr(ip);
++	sendAddr.sin_port	 = htons(port);
++
++	/* Get flags */
++	flags = fcntl(rtsp,F_GETFD);
++
++	/* Set socket non-blocking */
++	fcntl(rtsp,F_SETFD,flags | O_NONBLOCK);
++
++	/* Connect */
++	if (connect(rtsp,(struct sockaddr *)&sendAddr,sizeof(sendAddr))<0)
++		/* Exit */
++		return 0;
++
++	/* Prepare request */
++	snprintf(request,1024,"GET %s HTTP/1.0\r\nUser-Agent: app_rtsp\r\n Accept: application/x-rtsp-tunnelled\r\nPragma: no-cache\r\nCache-Control: no-cache\r\n\r\n",url);
++
++
++	/* Set arrays */
++	infds[0] = rtsp;
++
++	/* Loop */
++	while(!end)
++	{
++		/* No output */
++		outfd = -1;
++		/* Read from channels and fd*/
++		if (ast_waitfor_nandfds(&chan,1,infds,1,NULL,&outfd,&ms))
++		{
++			/* Read frame */
++			f = ast_read(chan);
++
++			/* If failed */
++			if (!f) 
++				/* exit */
++				break;
++			
++			/* If it's a control channel */
++			if (f->frametype == AST_FRAME_CONTROL) 
++				/* Check for hangup */
++				if (f->subclass.integer == AST_CONTROL_HANGUP)
++					/* exit */
++					end = 1;
++			/* free frame */
++			ast_frfree(f);
++		} else if (outfd==rtsp) {
++			/* Depending on state */	
++			switch (state)
++			{
++				case RTSP_TUNNEL_CONNECTING:
++					/* Send request */
++					if (!SendRequest(rtsp,request,&end))
++						/* exit*/
++						break;
++					/* It has been opened and sent*/
++					state = RTSP_TUNNEL_NEGOTIATION;	
++					break;
++				case RTSP_TUNNEL_NEGOTIATION:
++					/* Read into buffer */
++					if (!RecvResponse(rtsp,buffer,&bufferLen,bufferSize,&end))
++						break;
++					/* Process */
++					while (1)
++					{	
++						/* If not reading content */
++						if (contentLength==0)
++						{
++							/* Search end of response */
++							if ( (responseLen=GetResponseLen(buffer)) == 0 )
++								/*Exit*/
++								break;
++							/* Does it have content */
++							contentLength = GetHeaderValueInt(buffer,responseLen,"Content-Length");	
++							/* Is it sdp */
++							if (CheckHeaderValue(buffer,responseLen,"Content-Type","application/sdp"))
++								/* SDP */
++								isSDP = 1;
++							else
++								/* NO SDP*/
++								isSDP = 0;
++							/* If we have the sdp already */
++							if (sdp && HasHeader(buffer,responseLen,"RTP-Info"))
++								/* RTP */
++								state = RTSP_TUNNEL_RTP;
++							/* Get new length */
++							bufferLen -= responseLen;
++							/* Move data to begining */
++							memcpy(buffer,buffer+responseLen,bufferLen);
++			
++						/* If there is enough data */	
++						} else if (bufferLen>=contentLength) {
++							/* If it's the sdp */
++							if (isSDP)
++								/* Create SDP */
++								sdp = CreateSDP(buffer,contentLength);
++							/* Get new length */
++							bufferLen -= contentLength;
++							/* Move data to begining */
++							memcpy(buffer,buffer+contentLength,bufferLen);
++							/* Reset content */
++							contentLength = 0;
++						} else
++							break;
++					}
++					break;
++				case RTSP_TUNNEL_RTP:
++					break;
++			}
++		} else if (state==RTSP_TUNNEL_CONNECTING) 
++			/* Exit f timedout and not conected*/
++			end = 1;
++	}
++
++	/* If ther was a sdp */
++	if (sdp)
++		/* Destroy it */
++		DestroySDP(sdp);
++
++	/* Close socket */
++	close(rtsp);
++
++	/* Exit */	
++	return 0;
++}
++
++static int app_rtsp(struct ast_channel *chan, void *data)
++{
++	struct ast_module_user *u;
++	char *uri;
++	char *ip;
++	char *hostport;
++	char *url;
++	char *i;
++	char *username;
++	char *password;
++	int  port=0;
++	int  res=0;
++	int  isIPv6=0;
++
++	/* Get data */
++	uri = (char*)data;
++
++	/* Get proto part */
++	if ((i=strstr(uri,"://"))==NULL)
++	{
++		ast_log(LOG_ERROR,"RTSP ERROR: Invalid uri %s\n",uri);
++		return 0;
++	}
++
++	/* Increase url */
++	url = i + 3; 
++
++	/* Check for username and password */
++	if ((i=strstr(url,"@"))!=NULL)
++	{
++		/* Get user and password info */
++		username = strndup(url,i-url);
++		/* Remove form url */
++		url = i + 1;
++
++		/* Check for password */
++		if ((i=strstr(username,":"))!=NULL)
++		{
++			/* Get username */
++			i[0] = 0;
++			/* Get password */
++			password = i + 1;
++		} else {
++			/* No password */
++			password = NULL;
++		}
++	} else {
++		/* No uisername or password */
++		username = NULL;
++		password = NULL;
++	}
++
++	/* Get server part */
++	if ((i=strstr(url,"/"))!=NULL)
++	{
++		/* Assign server */
++		hostport = strndup(url,i-url);
++		/* Get url */
++		url = i;
++	} else {
++		/* all is server */
++		ip = strdup(url);
++		/* Get root */	
++		hostport = "/";
++	}
++
++	/* Get the ip */
++	ip = hostport;
++
++	/* Check if it is ipv6 */
++	if (ip[0]=='[')
++	{
++		/* Is ipv6*/
++		isIPv6 = 1;
++		/* Skip first */
++		ip++;
++		/* Find closing bracket */
++		i=strstr(ip,"]");
++		/* Remove from server */
++		i[0]=0;
++		/* check if there is a port after */
++		if (i[1]==':')
++			/* Get port */
++			port = atoi(i+2);
++	} else {
++		/* Get port */
++		if ((i=strstr(ip,":"))!=NULL)
++		{
++			/* Get port */
++			port = atoi(i+1);
++			/* Remove from server */
++			i[0] = 0;
++		}
++	}
++
++	/* Lock module */
++	u = ast_module_user_add(chan);
++
++	/* Depending on protocol */
++	if (strncmp(uri,"http",4)==0) {
++		/* if no port */
++		if (!port)
++			/* Default */
++			port = 80;
++		/* Play */
++		res = rtsp_tunnel(chan,ip,port,url);
++
++	} else if (strncmp(uri,"rtsp",4)==0) {
++		/* if no port */
++		if (!port)
++			/* Default */
++			port = 554;
++		/* Play */
++		res = rtsp_play(chan,ip,port,url,username,password,isIPv6);
++
++	} else
++		ast_log(LOG_ERROR,"RTSP ERROR: Unknown protocol in uri %s\n",uri);
++	
++	/* Unlock module*/
++	ast_module_user_remove(u);
++
++	/* Free ip */
++	free(hostport);
++
++	/* Free username */
++	if (username)
++		free(username);
++
++	/* Exit */
++	return res;
++}
++
++
++static int unload_module(void)
++{
++	int res;
++
++	res = ast_unregister_application(name_rtsp);
++
++	ast_module_user_hangup_all();
++
++	return res;
++}
++
++static int load_module(void)
++{
++	return ast_register_application(name_rtsp, app_rtsp, syn_rtsp, des_rtsp);
++}
++
++AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "RTSP applications");
++
+diff -Naur asterisk-1.8.3.2_orig/channels/chan_rtsp.c asterisk-1.8.3.2/channels/chan_rtsp.c
+--- asterisk-1.8.3.2_orig/channels/chan_rtsp.c	1970-01-01 01:00:00.000000000 +0100
++++ asterisk-1.8.3.2/channels/chan_rtsp.c	2012-03-21 14:12:45.000000000 +0000
+@@ -0,0 +1,3041 @@
++/*******************************************************************************
++ *        FILE: chan_rtsp.c
++ * DESCRIPTION: 
++ *              
++ * 
++ * $Archive: $
++ * $Revision: 1.5.0 $
++ * $Author: $
++ * $History: $
++ * 
++ * Luis Reis
++ *
++ * Based on PLL chan_rtsp and lib_rtsp from openH323
++ *
++ * Based on app_rtsp from Sergio Murillo
++ *
++ * Copyright (c) 2006-07 PT Inovação SA. All Rights Reserved
++ ******************************************************************************/
++
++
++#include "asterisk.h"
++
++ASTERISK_FILE_VERSION(__FILE__, "$Revision: 0005 $")
++
++#include <signal.h>
++#include <sys/signal.h>
++#include <regex.h>
++#include <inttypes.h>
++
++#include "asterisk/network.h"
++#include "asterisk/paths.h"   /* need ast_config_AST_SYSTEM_NAME */
++/*
++   Uncomment the define below,  if you are having refcount related memory leaks.
++   With this uncommented, this module will generate a file, /tmp/refs, which contains
++   a history of the ao2_ref() calls. To be useful, all calls to ao2_* functions should
++   be modified to ao2_t_* calls, and include a tag describing what is happening with
++   enough detail, to make pairing up a reference count increment with its corresponding decrement.
++   The refcounter program in utils/ can be invaluable in highlighting objects that are not
++   balanced, along with the complete history for that object.
++   In normal operation, the macros defined will throw away the tags, so they do not
++   affect the speed of the program at all. They can be considered to be documentation.
++*/
++/* #define  REF_DEBUG 1 */
++#include "asterisk/lock.h"
++#include "asterisk/config.h"
++#include "asterisk/module.h"
++#include "asterisk/pbx.h"
++#include "asterisk/sched.h"
++#include "asterisk/io.h"
++#include "asterisk/rtp_engine.h"
++#include "asterisk/udptl.h"
++#include "asterisk/acl.h"
++#include "asterisk/manager.h"
++#include "asterisk/callerid.h"
++#include "asterisk/cli.h"
++#include "asterisk/musiconhold.h"
++#include "asterisk/dsp.h"
++#include "asterisk/features.h"
++#include "asterisk/srv.h"
++#include "asterisk/astdb.h"
++#include "asterisk/causes.h"
++#include "asterisk/utils.h"
++#include "asterisk/file.h"
++#include "asterisk/astobj2.h"
++#include "asterisk/dnsmgr.h"
++#include "asterisk/devicestate.h"
++#include "asterisk/monitor.h"
++#include "asterisk/netsock2.h"
++#include "asterisk/localtime.h"
++#include "asterisk/abstract_jb.h"
++#include "asterisk/threadstorage.h"
++#include "asterisk/translate.h"
++#include "asterisk/ast_version.h"
++#include "asterisk/event.h"
++#include "asterisk/cel.h"
++#include "asterisk/data.h"
++#include "asterisk/aoc.h"
++
++
++static int rtspdebug = 0;
++
++static struct 
++{
++        unsigned long long format;
++        char* name;
++} mimeTypes[] = {
++      { AST_FORMAT_G723_1, "G723"},
++      { AST_FORMAT_GSM, "GSM"},
++      { AST_FORMAT_ULAW, "PCMU"},
++      { AST_FORMAT_ALAW, "PCMA"},
++      { AST_FORMAT_G726, "G726-32"},
++      { AST_FORMAT_ADPCM, "DVI4"},
++      { AST_FORMAT_SLINEAR, "L16"},
++      { AST_FORMAT_LPC10, "LPC"},
++      { AST_FORMAT_G729A, "G729"},
++      { AST_FORMAT_SPEEX, "speex"},
++      { AST_FORMAT_ILBC, "iLBC"},
++      { AST_FORMAT_G722, "G722"},
++      { AST_FORMAT_G726_AAL2, "AAL2-G726-32"},
++      { AST_FORMAT_AMRNB, "AMR"},
++
++      { AST_FORMAT_AMRWB, "AMR-WB"},
++      { AST_FORMAT_MPEG4_AUDIO, "MP4A-LATM"},
++      { AST_FORMAT_MPEG4_AUDIO, "AAC"},
++      { AST_FORMAT_MPEG4_AUDIO, "MP4A"},
++
++      { AST_FORMAT_JPEG, "JPEG"},
++      { AST_FORMAT_PNG, "PNG"},
++      { AST_FORMAT_H261, "H261"},
++      { AST_FORMAT_H263, "H263"},
++      { AST_FORMAT_H263_PLUS, "H263-1998"},
++      { AST_FORMAT_H263_PLUS_PLUS, "H263-2000"},
++      { AST_FORMAT_H264, "H264"},
++      { AST_FORMAT_MP4_VIDEO, "MP4V-ES"},
++};
++
++//- From rtp_engine.c but left only static payloads -
++#define AST_RTP_MAX_PT 256
++
++static const struct ast_rtp_payload_type static_RTP_PT[AST_RTP_MAX_PT] = {
++   [0] = {1, AST_FORMAT_ULAW},
++   #ifdef USE_DEPRECATED_G726
++   [2] = {1, AST_FORMAT_G726}, /* Technically this is G.721, but if Cisco can do it, so can we... */
++   #endif
++   [3] = {1, AST_FORMAT_GSM},
++   [4] = {1, AST_FORMAT_G723_1},
++   [5] = {1, AST_FORMAT_ADPCM}, /* 8 kHz */
++   [6] = {1, AST_FORMAT_ADPCM}, /* 16 kHz */
++   [7] = {1, AST_FORMAT_LPC10},
++   [8] = {1, AST_FORMAT_ALAW},
++   [9] = {1, AST_FORMAT_G722},
++   [10] = {1, AST_FORMAT_SLINEAR}, /* 2 channels */
++   [11] = {1, AST_FORMAT_SLINEAR}, /* 1 channel */
++   [16] = {1, AST_FORMAT_ADPCM}, /* 11.025 kHz */
++   [17] = {1, AST_FORMAT_ADPCM}, /* 22.050 kHz */
++   [18] = {1, AST_FORMAT_G729A},
++   [26] = {1, AST_FORMAT_JPEG},
++   [31] = {1, AST_FORMAT_H261},
++   [34] = {1, AST_FORMAT_H263},
++};
++
++//-----------------------------------------------------------------------------------------------------------
++/**
++ ** Symbols
++ **/
++/* RTSP Protocol Settings */
++#define DEFAULT_RTSP_PORT        5080    /* From RFC 2543 */
++#define DEFAULT_ENGINE           "asterisk"
++
++#define DESCRIBE_CMD	   1
++#define ANNOUNCE_CMD	   2
++#define TEARDOWN_CMD	   3
++#define PLAY_CMD		   4
++#define SETUP_CMD		   5		
++#define STOP_CMD		   6
++#define PAUSE_CMD		   7
++#define RECORD_CMD	   8
++
++#define RTSP_PROTOCOL   "RTSP/1.0"
++
++#ifndef TRUE
++#define     TRUE        1
++#endif /* TRUE */
++
++#ifndef FALSE
++#define     FALSE       0
++#endif /* FALSE */
++
++#define AUDIO_SDP             0
++#define VIDEO_SDP             1
++#define NUM_ACCEPTED_CODECS   2
++#define MAX_URL_SIZE          128
++
++#define DEFAULT_TOS_AUDIO      0      /*!< Audio packets should be marked as DSCP EF (Expedited Forwarding), but the default is 0 to be compatible with previous versions. */
++#define DEFAULT_TOS_VIDEO      0      /*!< Video packets should be marked as DSCP AF41, but the default is 0 to be compatible with previous versions. */
++#define DEFAULT_COS_AUDIO      5      /*!< Level 2 class of service for audio media  */
++#define DEFAULT_COS_VIDEO      6      /*!< Level 2 class of service for video media */
++
++
++/**
++ ** Structures
++ **/
++typedef struct
++{
++   char url[MAX_URL_SIZE];
++   char scheme[20]; /* scheme: http, rtsp, ...*/
++   char host[80];
++   int port;
++   char rep[MAX_URL_SIZE];
++} url_t;
++
++typedef struct
++{
++   int 	payload;
++   format_t	format;
++   char	control[MAX_URL_SIZE];
++   char  name[20];
++} rtspSDPFormat;
++
++typedef struct
++{
++   rtspSDPFormat formats[NUM_ACCEPTED_CODECS];
++   int num;
++} rtspSDPMedia;
++
++typedef struct
++{
++   char protocol[256];		// RTP/AVP
++   char type_cast[256];		// unicast broadcast multicast
++   char server_ip[40];
++   int client_RTP_port;	//  client RTP port
++   int client_RTCP_port;	// client RTCP port
++   int server_RTP_port;	// server RTP port
++   int server_RTCP_port;	// server RTCP port
++} rtsp_setup_t;
++
++typedef struct
++{
++   url_t			   url;		/* URL Information */  
++   int			   sock;		/* Socket */
++   unsigned int	cseq_tx;	/* Packet count (RTSP server) */
++   int			   connected;	/* Is connected? 0/1 */
++   float			   duration;	/* File duration time */
++   int			   session;	/* session id */
++   rtspSDPMedia       sdp[2];  /* 0 - audio, 1 - video */
++} rtspsession_t;
++
++typedef struct
++{
++   char name[256];
++   char value[256];
++} header_t;
++
++typedef struct
++{
++/*____NUM_OPT____*/
++	int 		NbCommand;
++/*___ALL METHODS___*/
++	int 		Blocksize;
++	int   	CSeq;
++   char     Location[MAX_URL_SIZE];
++	int 		Session;
++/*_____PLAY______*/
++	char 		PLAY_Range[128];
++/*_____SETUP_____*/
++	char 		SETUP_Transport[256]; 
++} t_reqcmd;
++
++struct rtsp_pvt 
++{
++	ast_mutex_t lock;                       /* Channel private lock */
++	struct ast_channel *owner;              /* Who owns us */
++	int capability;                         /* Special capability */
++	char accountcode[256];                  /* Account code */
++	int amaflags;                           /* AMA Flags */
++   struct ast_rtp_instance *rtp;                    /* RTP Session */
++   struct ast_rtp_instance *vrtp;
++	struct ast_sockaddr ourip;              /* Our IP */
++	struct ast_sockaddr redirip;            /* Where our RTP should be going if not to us */
++	struct ast_sockaddr vredirip;           /* Where our Video RTP should be going if not to us */
++	struct ast_sockaddr recv;               /* Received as */
++	char callid[80];                        /* Global CallID */
++	int jointcapability;                    /* Supported capability at both ends */
++	int sessionid;                          /* SDP Session ID */
++	int sessionversion;                     /* SDP Session Version */
++	struct ast_sockaddr sa;                 /* Our peer */
++	int nativeformats;					       /* Codec formats supported by a channel */
++   int vportno, aportno;
++   char sessionstr[128];
++   t_reqcmd sreqcmd, rreqcmd;
++   rtspsession_t rtspsession;
++   rtsp_setup_t rtspsetup;
++   int mark;
++} *iflist = NULL;
++
++/**
++ ** Variables
++ **/
++/* Asterisk Channel Settings */
++static const char tdesc[] = "Real Time Streaming Protocol (RTSP)";
++static const char config[] = "rtsp.conf";
++static const char type[] = "RTSP";
++/* Var declaration */
++static unsigned int chan_idx;       /*!< used in naming rtsp channel */
++static int capability = AST_FORMAT_ULAW;
++static struct ast_sockaddr internip;
++static struct ast_sockaddr bindaddr;
++static int global_rtptimeout;       /*!< Time out call if no RTP */
++static int global_rtpholdtimeout;   /*!< Time out call if no RTP during hold */
++static unsigned int global_tos_audio;    /*!< IP type of service for audio RTP packets */
++static unsigned int global_tos_video;    /*!< IP type of service for video RTP packets */
++static unsigned int global_cos_audio;    /*!< 802.1p class of service for audio RTP packets */
++static unsigned int global_cos_video;    /*!< 802.1p class of service for video RTP packets */
++static int use_rtcp;
++
++/* Asterisk RTP stuff*/
++static struct sched_context *sched;
++static struct io_context *io;
++static char context[AST_MAX_EXTENSION] = "default";
++static int usecnt =0;
++/* Mutexes */
++AST_MUTEX_DEFINE_STATIC(usecnt_lock);
++AST_MUTEX_DEFINE_STATIC(netlock);
++
++/**
++ ** Functions
++ **/
++/* Asterisk Functions */
++static int rtsp_call(struct ast_channel *, char *, int );
++static int rtsp_answer(struct ast_channel *);
++static int rtsp_hangup(struct ast_channel *);
++static int rtsp_write(struct ast_channel *, struct ast_frame *);
++static int rtsp_setoption(struct ast_channel *, int , void *, int );
++static struct ast_frame *rtsp_read(struct ast_channel *);
++static struct ast_channel *rtsp_request(const char *, format_t , const struct ast_channel *, void *, int *);
++/* Internal functions */
++static struct rtsp_pvt *rtsp_alloc(int , struct ast_sockaddr *, int );
++static int rtsp_send_cmd(struct ast_channel *, char *, char *);
++static struct ast_channel *rtsp_new(struct rtsp_pvt *, int , const char *);
++static struct ast_frame *rtsp_rtp_read(struct ast_channel *, struct rtsp_pvt *);
++static int ast_rtsp_ouraddrfor(const struct ast_sockaddr *, struct ast_sockaddr *, struct rtsp_pvt *);
++static int set_port(struct rtsp_pvt *, struct ast_rtp_instance *, struct ast_rtp_instance *);
++static int reload_config(void);
++
++/**
++ ** Prototypes
++ **/
++/* RTSP Protocol Messages */
++static int RunSetupVideoPlay(struct rtsp_pvt *, char *);
++static int RunSetupAudioPlay(struct rtsp_pvt *, char *);
++static int RunSetupVideoRecord(struct rtsp_pvt *, char *);
++static int RunSetupAudioRecord(struct rtsp_pvt *, char *);
++static int RunAnnounce(struct rtsp_pvt *, char *);
++static int RunDescribe(struct rtsp_pvt *, char *);
++static int RunRecord(struct rtsp_pvt *, char *);
++static int RunStop(struct rtsp_pvt *, char *);
++static int RunPause(struct rtsp_pvt *, char *);
++static float RunPlay(struct rtsp_pvt *, char *);
++/* RTSP Communication Functions */
++static int RTSP_Create(struct rtsp_pvt *, char *);
++static int RTSP_Parse_URL(struct rtsp_pvt *, char *);
++static int RTSP_Connect(struct rtsp_pvt *p);
++static int RTSP_Receive(struct rtsp_pvt *p);
++static int RTSP_Send(struct rtsp_pvt *p, char *msg);
++static int RTSP_Teardown(struct rtsp_pvt *p);
++/* Parse RTSP Protocol Functions */
++static void ParseSetup(struct rtsp_pvt *, char *);
++static void ParsePlay(struct rtsp_pvt *, char *);
++static int ParseReceiveResponse(struct rtsp_pvt *, char *);
++/* Auxiliar Functions */
++static int GetNumberLines(char *);
++static int GetResponsevalue(char *);
++static int GetNameHeader(char *, int, header_t *);
++static void GetReqCmd(struct rtsp_pvt *, header_t);
++/* Build RTSP Protocol Messages */
++static int BuildSetupVideoRequest(struct rtsp_pvt *, char *);
++static int BuildSetupAudioRequest(struct rtsp_pvt *, char *);
++static int BuildAnnounceRequest(struct rtsp_pvt *, char *);
++static int BuildDescribeRequest(struct rtsp_pvt *, char *);
++static int BuildRecordRequest(struct rtsp_pvt *, char *);
++static int BuildPlayRequest(struct rtsp_pvt *, char *);
++static int BuildTeardownRequest(struct rtsp_pvt *, char *);
++static int BuildPauseRequest(struct rtsp_pvt *, char *); 
++
++/**
++ ** Asterisk structs for ch registration
++ **/
++/*! \brief Definition of this channel for PBX channel registration */
++static const struct ast_channel_tech rtsp_tech = {
++	.type = type,
++	.description = tdesc,
++	.capabilities = AST_FORMAT_ULAW,
++	.properties = AST_CHAN_TP_WANTSJITTER,
++	.requester = rtsp_request,
++	.call = rtsp_call,
++	.hangup = rtsp_hangup,
++	.answer = rtsp_answer,
++	.read = rtsp_read,
++	.write = rtsp_write,
++	.write_video = rtsp_write,
++	.setoption = rtsp_setoption,
++};
++
++//----------------------------------------------------------------------------------------------------------------
++static int CreateMedia(struct rtsp_pvt *p, char *buffer, int bufferLen, int video)
++{
++   int num = 0;
++   int i = 0, j = 0, saved_i = 0;
++   
++   /* Count number of spaces*/
++   for (i=0;i<bufferLen;i++)
++   {
++      /* If it's a whitespace */
++      if (buffer[i]==' ')
++      {
++         /* Another one */
++         if (++num == 3) saved_i = i;
++      }
++   }
++   
++   /* if no media */
++   if (num<3)
++   {
++      ast_log(LOG_WARNING,"no media found on SDP\n");
++      /* Exit */
++      return 0;
++   }
++   
++   /* Get number of formats */
++   p->rtspsession.sdp[video].num = num - 2;
++
++   if (p->rtspsession.sdp[video].num > NUM_ACCEPTED_CODECS)
++   {
++      ast_log(LOG_WARNING,"got to many codecs on SDP\n");
++      p->rtspsession.sdp[video].num = NUM_ACCEPTED_CODECS;
++   }
++  
++   /* For each format */
++   for (i=saved_i;i<bufferLen;i++)
++   {
++      /* If it's a whitespace */
++      if (buffer[i]==' ')
++      {
++         /* Another one */
++         p->rtspsession.sdp[video].formats[j].payload    = atoi(buffer + i + 1);
++         
++         if (p->rtspsession.sdp[video].formats[j].payload >= 0 && p->rtspsession.sdp[video].formats[j].payload < AST_RTP_MAX_PT)
++            p->rtspsession.sdp[video].formats[j].format = static_RTP_PT[p->rtspsession.sdp[video].formats[j].payload].code;
++         else 
++            p->rtspsession.sdp[video].formats[j].format = 0;
++         
++         /* Init params */
++         p->rtspsession.sdp[video].formats[j].control[0] 	= '\0';
++
++         /* Log */
++         ast_log(LOG_DEBUG, "Creating media id%d, payload %d, format %ld\n", j,
++            p->rtspsession.sdp[video].formats[j].payload, 
++            (unsigned long)p->rtspsession.sdp[video].formats[j].format);
++
++         if (j++ >= p->rtspsession.sdp[video].num) break;
++      }
++   }
++   
++   /* Return media */
++   return 1;
++}
++
++static int CreateSDP(struct rtsp_pvt *p, char *buffer,int bufferLen)
++{
++	char *i = buffer;
++	char *j = NULL;
++	char *ini;
++	char *end;
++	int f = 0;
++   int k = 0;
++   int payload;
++   int media = -1;
++
++	/* Read each line */
++	while ( (j = strstr(i, "\n")) != NULL)
++	{
++		/* if it¡s not enougth data */
++		if (j-i<=1)
++			goto next;
++
++		/* If previous is a \r" */
++		if (j[-1]=='\r')
++			/* Decrease end */
++			j--;
++
++		/* log */
++		ast_log(LOG_DEBUG,"-line [%s]\n",strndup(i,j-i));
++
++		/* Check header */
++		if (strncmp(i, "m=", 2)== 0) 
++		{
++			/* media */
++			if (strncmp(i+2, "video", 5)==0)
++			{
++				/* create video */
++				if (!CreateMedia(p, i, j-i, VIDEO_SDP))
++            {
++               ast_log(LOG_NOTICE,"Error creating media on Video SDP\n");
++               return 0;
++            }
++            media = VIDEO_SDP;
++			} 
++         else if (strncmp(i+2, "audio", 5)==0) 
++         {
++				/* create audio */
++				if (!CreateMedia(p, i, j-i, AUDIO_SDP))
++            {
++               ast_log(LOG_NOTICE,"Error creating media on Audio SDP\n");
++               return 0;
++            }
++            media = AUDIO_SDP;
++			} 
++		} 
++      else if (strncmp(i, "a=rtpmap:", 9) == 0)
++      {
++			/* if not in media */
++			if (media < 0)
++				goto next;
++
++			/* get ini */
++			for (ini = i; ini < j; ini++)
++				/* if it ¡s space */
++				if (*ini == ' ')
++					break;
++			/* skip space*/
++			if (++ini >= j)
++				goto next;
++			/* get end */
++			for (end = ini; end < j; end++)
++				/* if it¡s space */
++				if (*end == '/')
++					break;
++
++         payload = atoi(i+9);
++         for (k = 0; k < p->rtspsession.sdp[media].num; k++)
++	      {
++            if (payload == p->rtspsession.sdp[media].formats[k].payload)
++            {
++			      /* Check formats */
++			      for (f = 0; f < sizeof(mimeTypes)/sizeof(mimeTypes[0]); ++f) 
++               {
++				      /* If the string is in it */
++				      if (strncasecmp(ini, mimeTypes[f].name, end-ini) == 0) 
++				      {
++					      /* Set type */
++					      p->rtspsession.sdp[media].formats[k].format = mimeTypes[f].format;
++                     snprintf(p->rtspsession.sdp[media].formats[k].name, 10, mimeTypes[f].name);
++
++                     ast_log(LOG_DEBUG, "Attaching media id%d, payload %d, format %ld, name %s]\n", k,
++                        p->rtspsession.sdp[media].formats[k].payload, 
++                        (unsigned long)p->rtspsession.sdp[media].formats[k].format,
++                        mimeTypes[f].name);
++
++					      /* Exit */
++					      break;
++				      }
++               }
++				}
++         }
++			/* Inc medias */
++		} 
++      else if (strncmp(i,"a=control:", 10) == 0)
++      {
++			/* if not in media */
++			if (media < 0)
++				goto next;
++
++         for (k = 0; k < p->rtspsession.sdp[media].num; k++)
++			{
++				/* Get new control */
++            int size = j-i-9;
++            if (size > sizeof(p->rtspsession.sdp[media].formats[k].control)) 
++               size = sizeof(p->rtspsession.sdp[media].formats[k].control);
++			 	snprintf(p->rtspsession.sdp[media].formats[k].control, size, i+10);
++			}
++         /* Log */
++         ast_log(LOG_DEBUG, "Attaching control [%s]\n", p->rtspsession.sdp[media].formats[0].control);
++		}
++next:
++		/* if it's a \r */
++		if (j[0]=='\r')
++			/* skip \r\n to next line */
++			i = j+2;
++		else
++			/* skip \n to next line */
++			i = j+1;
++	}
++
++	/* Return sdp */
++	return 1;
++}
++
++static int HasHeader(char *buffer,int bufferLen,char *header)
++{
++	int len;
++	char *i;
++
++	/* Get length */
++	len = strlen(header);
++
++	/* If no header*/
++	if (!len)
++		/* Exit */
++		return 0;
++
++	/* Get Header */
++	i = strcasestr(buffer,header);
++
++	/* If not found or not \r\n first*/
++	if (i<buffer+2)
++		/* Exit */
++		return 0;
++
++	/* If it's not in this request */
++	if (i-buffer>bufferLen)
++		/* Exit */
++		return 0;
++
++	/* Check for \r\n */
++	if (i[-2]!='\r' || i[-1]!='\n')
++		/* Exit */
++		return 0;
++
++	/* Check for ": " */
++	if (i[len]!=':' || i[len+1]!=' ')
++		/* Exit */
++		return 0;
++
++	/* Return value start */
++	return (i-buffer)+len+2;
++}
++
++static int GetHeaderValueInt(char *buffer,int bufferLen,char *header)
++{
++	int i;	 
++
++	/* Get start */
++	if (!(i=HasHeader(buffer,bufferLen,header)))
++		/* Exit */
++		return 0;
++
++	/* Return value */
++	return atoi(buffer+i);
++}
++
++static int CheckHeaderValue(char *buffer,int bufferLen,char *header,char*value)
++{
++	int i;	 
++
++	/* Get start */
++	if (!(i=HasHeader(buffer,bufferLen,header)))
++		/* Exit */
++		return 0;
++
++	/* Return value */
++	return (strncasecmp(buffer+i,value,strlen(value))==0);
++}
++
++static int RtspRecvResponse(struct rtsp_pvt *p,char *buffer,int *bufferLen,int bufferSize,int *end)
++{
++	/* Read into buffer */
++	int len = recv(p->rtspsession.sock, buffer+*bufferLen, bufferSize-*bufferLen, 0);
++
++	/* if error or closed */
++	if (len <= 0)
++	{
++		/* If failed connection */
++      if (!len) /* log */
++         ast_log(LOG_NOTICE, "Socket %d disconnected\n", p->rtspsession.sock);
++      else if (errno != EAGAIN && errno != EWOULDBLOCK)
++			ast_log(LOG_ERROR, "Error %d (%s) receiving response on sock %d\n", errno, strerror(errno), p->rtspsession.sock);
++      else return 0;
++
++      p->rtspsession.connected = 0;
++      close(p->rtspsession.sock);
++      p->rtspsession.sock = -1;
++		/* End */
++		*end = 1;
++
++		/* exit*/
++		return 0;
++	} 
++	/* Increase buffer length */
++	*bufferLen += len;
++	/* Finalize as string */
++	buffer[*bufferLen] = 0;
++
++	if (rtspdebug)
++	   ast_verbose("<--- RTSP read --->\n%s<------------>\n", buffer);
++
++	/* Return len */
++	return len;
++}
++
++static int GetResponseLen(char *buffer)
++{
++	char *i;
++	/* Search end of response */
++	if ((i=strstr(buffer,"\r\n\r\n"))==NULL)
++		/*Exit*/
++		return 0;
++	/* Get msg leng */
++	return i-buffer+4;
++}
++//----------------------------------------------------------------------------------------------------------------
++
++/*************************************************************************************************************/
++/*                                                                                                           */
++/*                              Asterisk RTSP functions                                                      */
++/*                                                                                                           */
++/*************************************************************************************************************/
++/**
++** rtsp_request function
++**/
++static struct ast_channel *rtsp_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause)
++{
++   struct rtsp_pvt *p;
++   char *host = data;
++   
++   ast_log(LOG_DEBUG, "type=%s, format=%ld, data=%s.\n", type, (unsigned long)format, (char *)data);
++   
++   if (!format) 
++   {
++      ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%ld'\n", (unsigned long)format);
++      return NULL;
++   }
++   /* allocate a new rtsp_pvt struct for ch */
++   if (!(p = rtsp_alloc(0, NULL, 0))) {
++      ast_log(LOG_WARNING, "Unable to build pvt data for 'RTSP/%s'\n", (char *)data);
++      return NULL;
++   }
++   /* Assign a default capability */
++   p->capability = format;
++   
++   /* create new channel */
++   return rtsp_new(p, AST_STATE_DOWN, host);
++}
++
++/**
++** rtsp_setoption function
++**/
++static int rtsp_setoption(struct ast_channel *chan, int option, void *data, int datalen)
++{
++   char url[256] = "";
++   struct rtsp_pvt *p = chan->tech_pvt;
++
++   strncpy(url, (char *)data, sizeof(url)-1);
++   
++   if (!p) 
++   {
++      ast_log(LOG_DEBUG, "No channel tech found!\n");
++      return -1;
++   }
++
++   if (p->mark == 0)
++   {
++      if (option == 1)
++      {  /* PLAY com SETUP */
++         if (!rtsp_send_cmd(chan, "Describe", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         if (!rtsp_send_cmd(chan, "RunSetupVideoPlay", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         if (!rtsp_send_cmd(chan, "RunSetupAudioPlay", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         if (!rtsp_send_cmd(chan, "Play", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         p->mark = 1;
++      }
++      if (option == 4)
++      { /* RECORD */
++         if (!rtsp_send_cmd(chan, "Announce", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         if (!rtsp_send_cmd(chan, "RunSetupVideoRecord", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         if (!rtsp_send_cmd(chan, "RunSetupAudioRecord", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         if (!rtsp_send_cmd(chan, "Record", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         p->mark = 1;
++      }
++   } 
++   else 
++   {
++      /* PLAY sem SETUP */
++      if (option == 1 && !rtsp_send_cmd(chan, "Play", url))
++      {
++         rtsp_hangup(chan); return -1;
++      }
++      /* PAUSE */
++      if (option == 2 && !rtsp_send_cmd(chan, "Pause", url))
++      {
++         rtsp_hangup(chan); return -1;
++      }
++      /* STOP */
++      if (option == 3)
++      { 
++         if (!rtsp_send_cmd(chan, "Stop", url)) 
++         {
++            rtsp_hangup(chan); return -1;
++         }
++         p->mark = 0;
++      }
++   }
++
++   return 0;
++}
++
++/**
++** rtsp_call function
++**/
++static int rtsp_call(struct ast_channel *chan, char *data, int timeout)
++{
++   struct rtsp_pvt *priv = chan->tech_pvt;;
++   char FullCommand[256];
++   
++   if (!data || !strlen((char *)data)) 
++   {
++      ast_log(LOG_WARNING, "rtsp_call requires an data argument\n");
++      return -1;
++   }   
++   if (!priv) 
++   {
++      ast_log(LOG_DEBUG, "No channel tech found!\n");
++      return -1;
++   }
++   sprintf(FullCommand, "%s RTSP/1.0", (char *)data);
++   ast_verbose("    -- Initiating RTSP call: %s on %s\n", FullCommand, chan->name);
++   
++   priv->mark = 0;
++
++   RTSP_Create(priv, FullCommand);
++   
++   set_port(priv, NULL, NULL);
++   rtsp_answer(chan);
++   memset(&priv->sreqcmd, 0, sizeof (priv->sreqcmd));
++   
++   usleep(1000);
++   
++   return 0;
++}
++
++/**
++** rtsp_answer function
++**/
++static int rtsp_answer(struct ast_channel *c)
++{
++   if (c->_state != AST_STATE_UP) ast_setstate(c, AST_STATE_UP);
++   return 0;
++}
++
++/**
++** rtsp_hangup function
++**/
++/* Part of PBX interface, called from ast_hangup */
++static int rtsp_hangup(struct ast_channel *c)
++{
++   struct rtsp_pvt *p = c->tech_pvt;
++   
++   if (!p) 
++   {
++      ast_log(LOG_DEBUG, "Asked to hangup channel not connected\n");
++      return 0;
++   }
++   ast_verbose("    -- Hanging up RTSP channel: %s!\n", c->name);
++
++   ast_mutex_lock(&p->lock);
++   
++   /* Determine how to disconnect */
++   if (p->owner != c) 
++   {
++      ast_log(LOG_WARNING, "Huh?  We aren't the owner?\n");
++      ast_mutex_unlock(&p->lock);
++      return 0;
++   }
++
++   /* Disconnect */
++   RTSP_Teardown(p);
++
++
++   /* Immediately stop RTP, VRTPas applicable */
++	if (p->rtp) {
++		/* Immediately stop RTP */
++	   ast_rtp_instance_stop(p->rtp);
++	}
++	if (p->vrtp) {
++		/* Immediately stop VRTP */
++	   ast_rtp_instance_stop(p->vrtp);
++	}
++
++   p->owner = NULL;
++   c->tech_pvt = NULL;
++   
++   if (p->rtp) {
++      ast_rtp_instance_destroy(p->rtp);
++   }
++   if (p->vrtp) {
++      ast_rtp_instance_destroy(p->vrtp);
++   }
++
++   /* Update usage counter */
++   ast_mutex_lock(&usecnt_lock);
++   usecnt--;
++   if (usecnt < 0) ast_log(LOG_WARNING, "Usecnt < 0\n");
++   ast_mutex_unlock(&usecnt_lock);
++   
++   ast_update_use_count();
++   ast_setstate(c, AST_STATE_DOWN);
++   
++   ast_mutex_unlock(&p->lock);
++
++   free(p);
++
++   return 0;
++}
++
++/**
++** rtsp_read function
++**/
++struct ast_frame *rtsp_read(struct ast_channel *ast)
++{
++   struct ast_frame *fr;
++   struct rtsp_pvt *p = ast->tech_pvt;
++   ast_mutex_lock(&p->lock);
++   fr = rtsp_rtp_read(ast, p);
++   ast_mutex_unlock(&p->lock);
++   return fr;
++}
++
++/**
++** rtsp_write function
++**/
++static int rtsp_write(struct ast_channel *ast, struct ast_frame *frame)
++{
++   struct rtsp_pvt *p = ast->tech_pvt;
++   int res = 0;
++
++   if (!frame) return -1;
++
++   switch (frame->frametype) {
++   case AST_FRAME_VOICE:
++//       if (!(frame->subclass & ast->nativeformats)) 
++//       {
++//          ast_log(LOG_WARNING, "Asked to transmit frame type %d, while native formats is %d (read/write = %d/%d)\n",
++//             frame->subclass, ast->nativeformats, ast->readformat, ast->writeformat);
++//          return -1;
++//       }
++      if (p) 
++      {
++         ast_mutex_lock(&p->lock);
++         if (p->rtp) 
++            res = ast_rtp_instance_write(p->rtp, frame);
++
++         ast_mutex_unlock(&p->lock);
++      }
++      break;
++   case AST_FRAME_VIDEO:
++      if (p) 
++      {
++         ast_mutex_lock(&p->lock);
++         if (p->vrtp) 
++            res =  ast_rtp_instance_write(p->vrtp, frame);
++
++         ast_mutex_unlock(&p->lock);
++      }
++      break;
++   case AST_FRAME_IMAGE:
++         return 0;
++         break;
++   default:
++      ast_log(LOG_WARNING, "Can't send %d type frames with RTSP write\n", frame->frametype);
++      return 0;
++   }
++   
++   return res;
++}
++
++/*! \brief  Return the first entry from ast_sockaddr_resolve filtered by address family
++ *
++ * \warn Using this function probably means you have a faulty design.
++ */
++static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
++                  const char* name, int flag, int family)
++{
++   struct ast_sockaddr *addrs;
++   int addrs_cnt;
++
++   addrs_cnt = ast_sockaddr_resolve(&addrs, name, flag, family);
++   if (addrs_cnt <= 0) {
++      return 1;
++   }
++   if (addrs_cnt > 1) {
++      ast_debug(1, "Multiple addresses, using the first one only\n");
++   }
++
++   ast_sockaddr_copy(addr, &addrs[0]);
++
++   ast_free(addrs);
++   return 0;
++}
++/*************************************************************************************************************/
++/*                          Local functions called by Asterisk RTSP functions                                */
++/*************************************************************************************************************/
++/**
++** rtsp_send_cmd function
++**/
++static int rtsp_send_cmd(struct ast_channel *chan, char *cmd, char *param)
++{
++   struct rtsp_pvt *p = chan->tech_pvt;
++
++   if (!p) return 0;
++
++   else if (cmd == "RunSetupVideoPlay") return RunSetupVideoPlay(p, param);
++   else if (cmd == "RunSetupAudioPlay") return RunSetupAudioPlay(p, param);
++   else if (cmd == "RunSetupVideoRecord") return RunSetupVideoRecord(p, param);
++   else if (cmd == "RunSetupAudioRecord") return RunSetupAudioRecord(p, param);
++   else if (cmd == "Play") sprintf(chan->context, "%f", RunPlay(p, param));
++   else if (cmd == "Record") return RunRecord(p, param);
++   else if (cmd == "Announce") return RunAnnounce(p, param);
++   else if (cmd == "Describe") return RunDescribe(p, param);
++   else if (cmd == "Pause") return RunPause(p, param);
++   else if (cmd == "Stop") return RunStop(p, param);
++   else { printf("Command Not Implemented\n"); return 0; }
++   
++   return 1;
++}
++
++/**
++** set_port function
++**/
++static int set_port(struct rtsp_pvt *p, struct ast_rtp_instance *rtp, struct ast_rtp_instance *vrtp)
++{
++   int len;
++   struct ast_sockaddr sin;
++   struct ast_sockaddr vsin;
++   struct ast_sockaddr dest;
++   struct ast_sockaddr vdest;
++   
++   p->ourip = bindaddr;
++   
++   // XXX We break with the "recommendation" and send our IP, in order that our peer doesn't have to gethostbyname() us XXX 
++   len = 0;
++   if (!p->rtp) 
++   {
++      ast_log(LOG_WARNING, "No way to add SDP without an RTP structure\n");
++      return -1;
++   }
++   if (!p->sessionid) 
++   {
++      p->sessionid = getpid();
++      p->sessionversion = p->sessionid;
++   } 
++   else p->sessionversion++;
++   ast_rtp_instance_get_local_address(p->rtp, &sin);
++   if (p->vrtp) ast_rtp_instance_get_local_address(p->vrtp, &vsin);
++   
++   if (!ast_sockaddr_isnull(&p->redirip))
++   {  /* If we have a redirection IP, use it */
++      ast_sockaddr_copy(&dest, &p->redirip);
++   } 
++   else if (rtp) 
++   {
++      ast_rtp_instance_get_remote_address(rtp, &dest);
++   } 
++   else 
++   {
++      ast_sockaddr_copy(&dest, &p->ourip);
++      ast_sockaddr_set_port(&dest, ast_sockaddr_port(&sin));
++   }
++   
++   /* Determine video destination */
++   if (p->vrtp) 
++   {
++      if (!ast_sockaddr_isnull(&p->redirip))
++      {  /* If we have a redirection IP, use it */
++         ast_sockaddr_copy(&vdest, &p->redirip);
++      } 
++      else if (vrtp) 
++      {
++         ast_rtp_instance_get_remote_address(vrtp, &vdest);
++      } 
++      else 
++      {
++         ast_sockaddr_copy(&vdest, &p->ourip);
++         ast_sockaddr_set_port(&vdest, ast_sockaddr_port(&vsin));
++      }
++   }
++   p->aportno = ast_sockaddr_port(&dest);
++   p->vportno = ast_sockaddr_port(&vdest);
++
++   ast_log(LOG_DEBUG,"Audio is at: %s port %d\n", ast_sockaddr_stringify_addr(&p->ourip), p->aportno);
++   ast_log(LOG_DEBUG,"Video is at: %s port %d\n", ast_sockaddr_stringify_addr(&p->ourip), p->vportno);
++   
++   return 0;
++}
++
++/**
++** ast_rtsp_ouraddrfor function
++**/
++static int ast_rtsp_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us, struct rtsp_pvt *p)
++{
++   if (!ast_sockaddr_isnull(&bindaddr))
++      ast_sockaddr_copy(us, &bindaddr);
++   else
++      return ast_ouraddrfor(them, us);
++   
++   return 0;
++}
++
++/**
++** rtsp_alloc function
++**/
++static struct rtsp_pvt *rtsp_alloc(int callid, struct ast_sockaddr *sin, int useglobalnat)
++{
++   struct rtsp_pvt *p;
++   struct ast_sockaddr bindaddr_tmp;
++
++   p = malloc(sizeof(struct rtsp_pvt));
++   if (!p) {
++      ast_log(LOG_ERROR, "Couldn't allocate private structure. This is bad\n");
++      return NULL;
++   }
++   
++   /* Keep track of stuff */
++   memset(p, 0, sizeof(struct rtsp_pvt));
++   //p->rtp = ast_rtp_new(sched, io, 1, 0);
++   ast_sockaddr_copy(&bindaddr_tmp, &bindaddr);
++
++   if (!(p->rtp = ast_rtp_instance_new(DEFAULT_ENGINE, sched, &bindaddr_tmp, NULL))) {
++      ast_log(LOG_WARNING, "Unable to create RTP session: %s\n", strerror(errno));
++      free(p);
++      return NULL;
++   }
++   
++   //p->vrtp = ast_rtp_new(sched, io, 1, 0);
++   if (!(p->vrtp = ast_rtp_instance_new(DEFAULT_ENGINE, sched, &bindaddr_tmp, NULL))) {
++      ast_log(LOG_WARNING, "Unable to create RTP session: %s\n", strerror(errno));
++      free(p);
++      return NULL;
++   }
++
++   ast_rtp_instance_set_timeout(p->rtp, global_rtptimeout);
++   ast_rtp_instance_set_hold_timeout(p->rtp, global_rtpholdtimeout);
++
++   if (use_rtcp)
++   {
++      ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_RTCP, 1);
++      ast_rtp_instance_set_prop(p->vrtp, AST_RTP_PROPERTY_RTCP, 1);
++   }
++   else
++   {
++      ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_RTCP, 0);
++      ast_rtp_instance_set_prop(p->vrtp, AST_RTP_PROPERTY_RTCP, 0);
++   }
++   ast_rtp_instance_set_qos(p->rtp, global_tos_audio, global_cos_audio, "RTSP RTP");
++
++   ast_rtp_instance_set_timeout(p->vrtp, global_rtptimeout);
++   ast_rtp_instance_set_hold_timeout(p->vrtp, global_rtpholdtimeout);
++
++   ast_rtp_instance_set_qos(p->vrtp, global_tos_video, global_cos_video, "RTSP RTP");
++
++   ast_mutex_init(&p->lock);
++   
++   if (!sin) {
++      p->ourip = bindaddr;
++   } else {
++      ast_sockaddr_copy(&p->sa, sin);
++      ast_rtsp_ouraddrfor(&p->sa, &p->ourip, p);
++   }
++
++   return p;
++}
++
++/**
++** rtsp_rtp_read function
++**/
++static struct ast_frame *rtsp_rtp_read(struct ast_channel *ast, struct rtsp_pvt *p)
++{
++   /* Retrieve audio/etc from channel.  Assumes p->lock is already held. */
++   struct ast_frame *f;
++
++	if (!p->rtp) {
++		/* We have no RTP allocated for this channel */
++		return &ast_null_frame;
++	}
++
++	switch(ast->fdno) {
++	case 0:
++		f = ast_rtp_instance_read(p->rtp, 0);	/* RTP Audio */
++		break;
++	case 1:
++		f = ast_rtp_instance_read(p->rtp, 1);	/* RTCP Control Channel */
++		break;
++	case 2:
++		f = ast_rtp_instance_read(p->vrtp, 0);	/* RTP Video */
++		break;
++	case 3:
++		f = ast_rtp_instance_read(p->vrtp, 1);	/* RTCP Control Channel for video */
++		break;
++	default:
++		f = &ast_null_frame;
++	}
++
++	/* Don't forward RFC2833 if we're not supposed to */
++   if (!f) 
++   {
++      ast_log(LOG_WARNING, "Got null frame on channel %s\n", ast->name);
++      return &ast_null_frame;
++   }
++   if (f->frametype == AST_FRAME_DTMF) return &ast_null_frame;
++	if (p->owner) {
++		/* We already hold the channel lock */
++		if (f->frametype == AST_FRAME_VOICE) {
++			if (f->subclass.codec != (p->owner->nativeformats & AST_FORMAT_AUDIO_MASK))
++         {
++		      ast_debug(1, "Oooh, format changed to %s\n",
++		         ast_getformatname(f->subclass.codec));
++		      p->owner->nativeformats = (p->owner->nativeformats & (AST_FORMAT_VIDEO_MASK | AST_FORMAT_TEXT_MASK)) | f->subclass.codec;
++				ast_set_read_format(p->owner, p->owner->readformat);
++				ast_set_write_format(p->owner, p->owner->writeformat);
++			}
++		}
++	}
++	return f;
++}
++
++/**
++** rtsp_new function
++**/
++static struct ast_channel *rtsp_new(struct rtsp_pvt *i, int state, const char *host)
++{
++   struct ast_channel *ch;
++   int fmt;
++
++	ast_mutex_unlock(&i->lock);
++	/* Don't hold a rtsp pvt lock while we allocate a channel */
++
++   ch = ast_channel_alloc(1, state, 0, 0, 0, 0, 0, 0, 0, "RTSP/%s-%08x", host, ast_atomic_fetchadd_int((int *)&chan_idx, +1));
++
++	ast_mutex_lock(&i->lock);
++	if (!ch) {
++		ast_log(LOG_WARNING, "Unable to allocate RTSP channel structure\n");
++      // ???
++	   ast_mutex_lock(&i->lock);
++		return NULL;
++	}   
++   
++   ast_mutex_lock(&i->lock);
++   ch->tech = &rtsp_tech;
++
++	/* Select our native format based on codec preference until we receive
++	   something from another device to the contrary. */
++   //ch->nativeformats = i->capability;
++   if (!ch->nativeformats) ch->nativeformats = capability;
++	ast_mutex_unlock(&i->lock);
++	fmt = ast_best_codec(ch->nativeformats);
++
++	/* Set file descriptors for audio, video, realtime text and UDPTL as needed */
++   if (i->rtp) {
++      ast_channel_set_fd(ch, 0, ast_rtp_instance_fd(i->rtp, 0));
++      ast_channel_set_fd(ch, 1, ast_rtp_instance_fd(i->rtp, 1));
++   }
++   if (i->vrtp) {
++      ast_channel_set_fd(ch, 2, ast_rtp_instance_fd(i->vrtp, 0));
++      ast_channel_set_fd(ch, 3, ast_rtp_instance_fd(i->vrtp, 1));
++   }
++   
++   ast_setstate(ch, state);
++   
++   if (state == AST_STATE_RING)
++      ch->rings = 1;
++   
++	ch->adsicpe = AST_ADSI_UNAVAILABLE;
++	ch->writeformat = fmt;
++	ch->rawwriteformat = fmt;
++	ch->readformat = fmt;
++	ch->rawreadformat = fmt;
++   
++   /* Register the OpenH323 channel's functions. */
++   ch->tech_pvt = i;
++   
++   /*  Set the owner of this channel */
++   i->owner = ch;
++   
++   ast_mutex_lock(&usecnt_lock);
++   usecnt++;
++   ast_mutex_unlock(&usecnt_lock);
++   ast_update_use_count();
++   ch->priority = 1;
++
++   if (!ast_strlen_zero(i->callid)) 
++		pbx_builtin_setvar_helper(ch, "RTSPCALLID", i->callid);
++	if (!ast_strlen_zero(i->accountcode))
++		ast_string_field_set(ch, accountcode, i->accountcode);
++   if (i->amaflags) ch->amaflags = i->amaflags;
++   if (state != AST_STATE_DOWN) 
++   {
++      if (ast_pbx_start(ch)) 
++      {
++         ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ch->name);
++         ast_hangup(ch);
++         ch = NULL;
++      }
++   }
++
++   return ch;
++}
++
++
++/*************************************************************************************************************/
++/*                                                                                                           */
++/*                              RTSP Protocol Functions                                                      */
++/*                                                                                                           */
++/*************************************************************************************************************/
++/**
++** Send SETUP request
++**/
++ //Setup Video for play - trackid=3
++int RunSetupVideoPlay(struct rtsp_pvt *p, char *Parameters)
++{
++   struct ast_sockaddr sin;
++   char				msg[1024];
++   int retval;
++   
++   p->sreqcmd.NbCommand = SETUP_CMD;
++
++   ast_log(LOG_DEBUG, "Parameters = %s\n", Parameters);
++   
++   if (Parameters != NULL)
++   {
++      if (!strncmp(p->rtspsession.sdp[VIDEO_SDP].formats[0].control, "rtsp://", 7))
++         snprintf(p->sreqcmd.Location, sizeof(p->sreqcmd.Location), "%s", p->rtspsession.sdp[VIDEO_SDP].formats[0].control);
++      else
++         snprintf(p->sreqcmd.Location, sizeof(p->sreqcmd.Location), "%s/%s", Parameters, p->rtspsession.sdp[VIDEO_SDP].formats[0].control);
++      sprintf(p->sreqcmd.SETUP_Transport, "RTP/AVP;unicast;client_port=%i-%i;mode=play",p->vportno,(p->vportno+1));
++   }
++
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++
++   if ((retval = BuildSetupVideoRequest(p, msg)) == 0) 
++   {
++      ast_log(LOG_WARNING, "BuildSetupVideoRequest() Failed\n");
++   }
++
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   else p->rtspsession.session = p->rreqcmd.Session;
++
++   ParseSetup(p, p->rreqcmd.SETUP_Transport);
++
++   ast_log(LOG_DEBUG, "Server port: %d, client port: %d, server ip: %s\n",
++        p->rtspsetup.client_RTP_port, p->rtspsetup.server_RTP_port, p->rtspsetup.server_ip);
++   
++   if (p->rtspsetup.server_RTP_port == 0) 
++   {
++      ast_log(LOG_DEBUG, "No RTP port found!\n");
++      return 1;
++   }
++   // To enable IPv6, should decide if AF_INET6
++   if (ast_sockaddr_resolve_first_af(&sin, p->rtspsetup.server_ip, 0, AF_INET)) {
++      ast_log(LOG_WARNING, "Unable to lookup RTP Video host '%s'\n", p->rtspsetup.server_ip);
++      return 0;
++   }
++   ast_sockaddr_set_port(&sin, p->rtspsetup.server_RTP_port);
++   ast_rtp_instance_set_remote_address(p->vrtp, &sin);
++
++   return 1;
++}
++
++/**
++** Send SETUP request
++**/
++//Setup Audio for play - trackid=4
++int RunSetupAudioPlay(struct rtsp_pvt *p, char *Parameters)
++{
++   struct ast_sockaddr sin;
++   char     msg[1024];
++   int retval;
++
++   p->sreqcmd.NbCommand = SETUP_CMD;
++   
++   ast_log(LOG_DEBUG, "Parameters = %s\n", Parameters);
++
++   if (Parameters != NULL)
++   {
++      if (!strncmp(p->rtspsession.sdp[AUDIO_SDP].formats[0].control, "rtsp://", 7))
++         snprintf(p->sreqcmd.Location, sizeof(p->sreqcmd.Location), "%s", p->rtspsession.sdp[AUDIO_SDP].formats[0].control);
++      else
++         snprintf(p->sreqcmd.Location, sizeof(p->sreqcmd.Location), "%s/%s", Parameters, p->rtspsession.sdp[AUDIO_SDP].formats[0].control);
++
++      sprintf(p->sreqcmd.SETUP_Transport, "RTP/AVP;unicast;client_port=%i-%i;mode=play",p->aportno,(p->aportno+1));
++      //printf("Audio -> RTP/AVP;unicast;client_port=%i-%i\n",aportno,(aportno+1));
++   }
++   
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   if ((retval = BuildSetupAudioRequest(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "BuildSetupAudioRequest() Failed\n");
++   }
++   //printf("Msg to send :\n%s", msg);
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   p->rtspsession.session = p->rreqcmd.Session;
++   ParseSetup(p, p->rreqcmd.SETUP_Transport);
++   
++   ast_log(LOG_DEBUG, "Server port: %d, client port: %d, server ip: %s\n", 
++        p->rtspsetup.client_RTP_port, p->rtspsetup.server_RTP_port, p->rtspsetup.server_ip);
++
++   if (p->rtspsetup.server_RTP_port == 0) 
++   {
++      ast_log(LOG_NOTICE, "RTSP_Setup return error on RTP port\n");
++      return 0;
++   }
++   // To enable IPv6, should decide if AF_INET6
++   if (ast_sockaddr_resolve_first_af(&sin, p->rtspsetup.server_ip, 0, AF_INET)) {
++      ast_log(LOG_WARNING, "Unable to lookup RTP Audio host '%s'\n", p->rtspsetup.server_ip);
++      return 0;
++   }
++   ast_sockaddr_set_port(&sin, p->rtspsetup.server_RTP_port);
++   ast_rtp_instance_set_remote_address(p->rtp, &sin);
++
++   return 1;
++}
++
++/**
++** Send SETUP request
++**/
++//Setup Video for record - trackid=1
++int RunSetupVideoRecord(struct rtsp_pvt *p, char *Parameters)
++{
++   struct ast_sockaddr sin;
++   char				msg[1024];
++   int retval;
++
++   p->sreqcmd.NbCommand = SETUP_CMD;
++
++   ast_log(LOG_DEBUG, "Parameters = %s\n", Parameters);
++
++   if (Parameters != NULL)
++   {
++      snprintf(p->sreqcmd.Location, sizeof(p->sreqcmd.Location), "%s/trackid=1", Parameters);      
++	//mode=receive
++      sprintf(p->sreqcmd.SETUP_Transport, "RTP/AVP;unicast;client_port=%i-%i;mode=record",p->vportno,(p->vportno+1));
++   }
++   
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++
++   if ((retval = BuildSetupVideoRequest(p, msg)) == 0) 
++   {
++      ast_log(LOG_WARNING, "BuildSetupVideoRequest() Failed\n");
++      return 0;
++   }
++
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   else p->rtspsession.session = p->rreqcmd.Session;
++
++   ParseSetup(p, p->rreqcmd.SETUP_Transport);
++
++   ast_log(LOG_DEBUG, "server_RTP_port %d\n", p->rtspsetup.server_RTP_port);
++
++   if (p->rtspsetup.server_RTP_port == 0) 
++   {
++      ast_log(LOG_NOTICE, "RTSP_SetupVideo return error on RTP port\n");
++      return 0;
++   }
++   
++   // To enable IPv6, should decide if AF_INET6
++   if (ast_sockaddr_resolve_first_af(&sin, p->rtspsetup.server_ip, 0, AF_INET)) {
++      ast_log(LOG_WARNING, "Unable to lookup RTP Video host '%s'\n", p->rtspsetup.server_ip);
++      return 0;
++   }
++   ast_sockaddr_set_port(&sin, p->rtspsetup.server_RTP_port);
++   ast_rtp_instance_set_remote_address(p->vrtp, &sin);
++
++   //printf("Command: SETUP\nURL: %s\nTransport: %s\n", p->sreqcmd.Location, p->sreqcmd.SETUP_Transport);
++   return 1;
++}
++
++/**
++** Send SETUP request
++**/
++//Setup audio for record - trackid=2
++int RunSetupAudioRecord(struct rtsp_pvt *p, char *Parameters)
++{
++   struct ast_sockaddr sin;
++   char     msg[1024];
++   int retval;
++
++   p->sreqcmd.NbCommand = SETUP_CMD;
++   
++   ast_log(LOG_DEBUG, "Parameters = %s\n", Parameters);
++   
++   if (Parameters != NULL)
++   {
++      snprintf(p->sreqcmd.Location, sizeof(p->sreqcmd.Location), "%s/trackid=2", Parameters);
++      sprintf(p->sreqcmd.SETUP_Transport, "RTP/AVP;unicast;client_port=%i-%i;mode=record",p->aportno,(p->aportno+1));
++   }
++   
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   if ((retval = BuildSetupAudioRequest(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "BuildSetupAudioRequest() Failed\n");
++      return 0;
++   }
++   //printf("Msg to send :\n%s", msg);
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   p->rtspsession.session = p->rreqcmd.Session;
++   ParseSetup(p, p->rreqcmd.SETUP_Transport);
++   
++   if (p->rtspsetup.server_RTP_port == 0) 
++   {
++      ast_log(LOG_NOTICE, "RTSP_Setup return error on RTP port\n");
++      return 0;
++   }
++
++   // To enable IPv6, should decide if AF_INET6
++   if (ast_sockaddr_resolve_first_af(&sin, p->rtspsetup.server_ip, 0, AF_INET)) {
++      ast_log(LOG_WARNING, "Unable to lookup RTP Audio host '%s'\n", p->rtspsetup.server_ip);
++      return 0;
++   }
++   ast_sockaddr_set_port(&sin, p->rtspsetup.server_RTP_port);
++   ast_rtp_instance_set_remote_address(p->rtp, &sin);
++   return 1;
++}
++
++/**
++** Send ANNOUNCE request
++**/
++int RunAnnounce(struct rtsp_pvt *p, char *Parameters)
++{
++   char    *StrBuffer;
++   char     msg[1024];
++   int      retval;
++
++   p->sreqcmd.NbCommand = ANNOUNCE_CMD;
++   if (Parameters != NULL)
++   {
++      if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++      {
++         strncpy(p->sreqcmd.Location, Parameters, strlen(Parameters) - strlen(StrBuffer));
++      }
++      else strcpy(p->sreqcmd.Location, Parameters);
++   }
++   
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   
++   if ((retval = BuildAnnounceRequest(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "BuildAnnounceRequest() Failed\n");
++      return 0;
++   }
++   //printf("Msg to send :\n%s", msg);
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   p->rtspsession.session = p->rreqcmd.Session;
++
++   return 1;
++}
++
++/**
++** Send DESCRIBE request
++**/
++int RunDescribe(struct rtsp_pvt *p, char *Parameters)
++{
++   char    *StrBuffer;
++   char     msg[1024];
++   int      retval;
++
++   p->sreqcmd.NbCommand = DESCRIBE_CMD;
++   if (Parameters != NULL)
++   {
++      //TODO: REMOVE THIS ...
++      if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++      {
++         strncpy(p->sreqcmd.Location, Parameters, strlen(Parameters) - strlen(StrBuffer));
++      }
++      else strcpy(p->sreqcmd.Location, Parameters);
++   }
++   
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   
++   if ((retval = BuildDescribeRequest(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "BuildDescribeRequest() Failed\n");
++      return 0;
++   }
++   //printf("Msg to send :\n%s", msg);
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   p->rtspsession.session = p->rreqcmd.Session;
++
++   return 1;
++}
++
++/**
++** Send RECORD request
++**/
++int RunRecord(struct rtsp_pvt *p, char *Parameters)
++{
++   char    *StrBuffer;
++   char        msg[1024];
++   int retval;
++   
++   p->sreqcmd.NbCommand = RECORD_CMD;
++   if (Parameters != NULL)
++   {
++      if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++      {
++         strncpy(p->sreqcmd.Location, Parameters, strlen(Parameters) - strlen(StrBuffer));
++      }
++      else strcpy(p->sreqcmd.Location, Parameters);
++   }
++  
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   BuildRecordRequest(p, msg);
++
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   p->rtspsession.session = p->rreqcmd.Session;
++
++   return 1;
++}
++
++/**
++** Send PLAY request
++**/
++float RunPlay(struct rtsp_pvt *p, char *Parameters)
++{
++   char    *StrBuffer;
++   char        msg[1024];
++   int retval;
++   
++   p->sreqcmd.NbCommand = PLAY_CMD;
++   if (Parameters != NULL)
++   {
++      if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++         strncpy(p->sreqcmd.Location, Parameters, strlen(Parameters) - strlen(StrBuffer));
++      else strcpy(p->sreqcmd.Location, Parameters);
++   }
++   
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   BuildPlayRequest(p, msg);
++
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++   ParsePlay(p, p->rreqcmd.PLAY_Range);
++
++   return p->rtspsession.duration;
++}
++
++/**
++** Send TEARDOWN request
++**/
++int RunStop(struct rtsp_pvt *p, char *Parameters)
++{
++   char    *StrBuffer;
++   char    SessionBuff[1024];
++   
++   p->sreqcmd.NbCommand = STOP_CMD;
++   if (Parameters != NULL)
++   {
++      if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++         strncpy(p->sreqcmd.Location, Parameters, strlen(Parameters) - strlen(StrBuffer));
++      else strcpy(p->sreqcmd.Location, Parameters);
++      
++      if (StrBuffer != NULL)
++      {
++         do
++         StrBuffer++;
++         while (StrBuffer[0] == ' ');
++         Parameters = StrBuffer;
++         if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++         {
++            strncpy(SessionBuff, Parameters, strlen(Parameters) - strlen(StrBuffer));
++            p->sreqcmd.Session = atoi(SessionBuff);
++         }
++         else p->sreqcmd.Session = atoi(Parameters);
++      }
++   }
++   
++   RTSP_Teardown(p);
++   
++   return 1;
++}
++
++/**
++** Send PAUSE request
++**/
++int RunPause(struct rtsp_pvt *p, char *Parameters)
++{
++   char        msg[1024];
++   char    *StrBuffer;
++   char    SessionBuff[1024];
++   int retval;
++   
++   p->sreqcmd.NbCommand = PAUSE_CMD;
++   if (Parameters != NULL)
++   {
++      if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++         strncpy(p->sreqcmd.Location, Parameters, strlen(Parameters) - strlen(StrBuffer));
++      else strcpy(p->sreqcmd.Location, Parameters);
++      
++      if (StrBuffer != NULL)
++      {
++         do
++         StrBuffer++;
++         while (StrBuffer[0] == ' ');
++         Parameters = StrBuffer;
++         if ((StrBuffer = strchr(Parameters, ' ')) != NULL)
++         {
++            strncpy(SessionBuff, Parameters, strlen(Parameters) - strlen(StrBuffer));
++            p->sreqcmd.Session = atoi(SessionBuff);
++         }
++         else p->sreqcmd.Session = atoi(Parameters);
++      }
++   }
++   
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   BuildPauseRequest(p, msg);
++   //printf("Msg to send :\n%s", msg);
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      ast_log(LOG_WARNING, "RTSP_Receive() Failed\n");
++      return 0;
++   }
++
++   return 1;   
++}
++
++/*************************************************************************************************************/
++/*                              RTSP Parse Functions                                                         */
++/*************************************************************************************************************/
++/**
++** Parse the "Range" parameter
++**/
++static void	ParsePlay(struct rtsp_pvt *p, char *range)
++{
++   int				i = 0;
++   int				j = 0;
++   char				buff[512];
++   float				time_start, time_end;
++   
++   if (range == NULL)
++   {
++      printf("Error in Method PLAY, no Range header has been received by server\n");
++      return ;
++   }
++   
++   memset(buff, 0, 512);
++   while ((range[i] != '=') && (range[i] != '\0')) i++;
++   i++;
++   while ((range[i] != '-') && (range[i] != '\0'))
++   {
++      buff[j] = range[i];
++      j++;
++      i++;
++   }
++   buff[j] = '\0';
++   time_start = atof(buff);
++   j = 0;
++   i++;
++   memset(buff, 0, 512);
++   while ((range[i] != ';') && (range[i] != '\0'))
++   {
++      buff[j] = range[i];
++      j++;
++      i++;
++   }
++   buff[j] = '\0';
++   time_end = atof(buff);
++   
++   p->rtspsession.duration = time_end - time_start;
++}
++
++
++/**
++** Parse the "Transport" parameter
++**/
++static void ParseSetup(struct rtsp_pvt *p, char *transport)
++{
++   int	i;
++   int	j = 0;
++   char buff[512], *pos;
++   
++   if (transport == NULL)
++   {
++      ast_log(LOG_WARNING, "Error in Method SETUP, no Transport header has been received by server\n");
++      return;
++   }
++   memset(&p->rtspsetup, 0, sizeof(p->rtspsetup));   
++//Transport: RTP/AVP;unicast;source=10.112.136.236;client_port=15192-15193;server_port=6970-6971;ssrc=0AA45D9A
++
++   // Protocole
++   memset(buff, 0, 512);
++   for ( i = 0; ((transport[i] != ';') && (transport[i] != '\0')); i++)
++      buff[i] = transport[i];
++   buff[i] = '\0';
++   strcpy(p->rtspsetup.protocol, buff);
++   i++;
++   
++   // Type Cast
++   memset(buff, 0, 512);
++   while ((transport[i] != ';') && (transport[i] != '\0'))
++   {
++      buff[j] = transport[i];
++      j++;
++      i++;
++   }
++   buff[j] = '\0';
++   strcpy(p->rtspsetup.type_cast, buff);
++   j = 0;
++
++   
++   // Client Port
++   memset(buff, 0, 512);
++   if ((pos = strstr(transport, "client_port=")) != NULL)
++   {
++      i = pos - transport + 12;
++      while ((transport[i] != '-') && (transport[i] != '\0'))
++      {
++         buff[j] = transport[i];
++         j++;
++         i++;
++      }
++      buff[j] = '\0';
++
++      p->rtspsetup.client_RTP_port = atoi(buff);
++      j = 0;
++      i++;
++      memset(buff, 0, 512);
++      while ((transport[i] != ';') && (transport[i] != '\0'))
++      {
++         buff[j] = transport[i];
++         j++;
++         i++;
++      }
++      buff[j] = '\0';
++      p->rtspsetup.client_RTCP_port = atoi(buff);
++      j = 0;
++   }
++
++   // Source Address
++   memset(buff, 0, 512);
++   if ((pos = strstr(transport, "source=")) != NULL)
++   {
++      i = pos - transport + 7;
++      while ((transport[i] != ';') && (transport[i] != '\0'))
++      {
++         buff[j] = transport[i];
++         j++;
++         i++;
++      }
++      strcpy(p->rtspsetup.server_ip, buff);
++      j = 0;
++      i++;
++   }
++
++   
++   // Serveur Port
++   memset(buff, 0, 512);
++   if ((pos = strstr(transport, "server_port=")) != NULL)
++   {
++      i = pos - transport + 12;
++      while ((transport[i] != '-') && (transport[i] != '\0'))
++      {
++         buff[j] = transport[i];
++         j++;
++         i++;
++      }
++      buff[j] = '\0';
++
++      p->rtspsetup.server_RTP_port = atoi(buff);
++
++      j = 0;
++      i++;
++      memset(buff, 0, 512);
++      while ((transport[i] != '\r') && (transport[i] != '\0'))
++      {
++         buff[j] = transport[i];
++         j++;
++         i++;
++      }
++      buff[j] = '\0';
++      p->rtspsetup.server_RTCP_port = atoi(buff);
++      j = 0;
++   }
++}
++
++/**
++** Parse the target's URL
++**/
++static int RTSP_Parse_URL(struct rtsp_pvt *p, char *url_str)
++{
++   int					i;
++   char					buff[512];
++   int					host = 0;
++   int					port = 0;
++   int					rep = 0;
++
++   /* Parsing de l'URL */
++   // Scheme (rtsp)
++   for (i = 0; ((url_str[i] != ':') && (url_str[i] != '\0')); i++)
++   {
++      buff[i] = url_str[i];
++   }
++   buff[i] = '\0';
++   strncpy(p->rtspsession.url.scheme, buff, sizeof(p->rtspsession.url.scheme));
++   
++   // Host (addr)
++   i = i + 3;
++   memset(buff, 0, 512);
++   while ((url_str[i] != ':') && (url_str[i] != '/') && (url_str[i] != '\0'))
++   {
++      buff[host] = url_str[i];
++      host++;
++      i++;
++   }
++   buff[host] = '\0';
++   strncpy(p->rtspsession.url.host, buff, sizeof(p->rtspsession.url.host));
++   
++   // Port (:xxxx)
++   memset(buff, 0, 512);
++   if (url_str[i] == ':')
++   {
++      i++;
++      while ((url_str[i] != '/') && (url_str[i] != '\0'))
++      {
++         buff[port] = url_str[i];
++         port++;
++         i++;
++      }
++      buff[port] = '\0';
++      p->rtspsession.url.port = atoi(buff);
++   }
++   else p->rtspsession.url.port = 0;
++   
++   // Rep (/movie/superman.mpg)
++   memset(buff, 0, 512);
++   if (url_str[i] == '/')
++   {
++      while (url_str[i] != '\0')
++      {
++         buff[rep] = url_str[i];
++         rep++;
++         i++;
++      }
++      buff[rep] = '\0';
++      strncpy(p->rtspsession.url.rep, buff, sizeof(p->rtspsession.url.rep));
++   }
++   else p->rtspsession.url.rep[0] = '\0';
++   
++   return 1;
++}
++
++/**
++** ParseReceiveResponse
++**/
++static int ParseReceiveResponse(struct rtsp_pvt *p, char *f)
++{
++   int				nb_lines;
++   header_t			header;
++   int				current_line;
++   
++   //ast_log(LOG_DEBUG, "Receiving %s\n", f);  
++
++   nb_lines = GetNumberLines(f);
++   if (GetResponsevalue(f) == 200 || GetResponsevalue(f) == 201)
++   {
++      ast_log(LOG_DEBUG, "RTSP Server  -> OK\n");
++      for ( current_line = 1; (current_line < nb_lines); current_line++)
++      {
++         GetNameHeader(f, current_line, &header);
++         GetReqCmd(p, header);
++      }
++   }
++   else
++   {
++      ast_log(LOG_NOTICE, "RTSP Server  -> ERROR %d\n", GetResponsevalue(f));
++      return 0;
++   }
++   return 1;
++}
++
++/*************************************************************************************************************/
++/*                              RTSP Message Build Functions                                                 */
++/*************************************************************************************************************/
++/**
++** Build the request of a SETUP command
++**/
++static int BuildSetupVideoRequest(struct rtsp_pvt *p, char *Request)
++{
++   char  buffer[512];
++  
++   sprintf(Request, "SETUP %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   sprintf(buffer, "%i\r\n", p->sreqcmd.CSeq);
++   strcat(Request, buffer);
++
++   if (p->sreqcmd.SETUP_Transport != NULL)
++   {
++      sprintf(buffer, "Transport: %s\r\n", p->sreqcmd.SETUP_Transport);
++      strcat(Request, buffer);
++   }
++   strcat(Request, "\r\n");
++   return 1;
++}
++
++
++/**
++** Build the request of a SETUP2 command
++**/
++static int BuildSetupAudioRequest(struct rtsp_pvt *p, char *Request)
++{
++   char   buffer[512];
++     
++   sprintf(Request, "SETUP %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   sprintf(buffer, "%i\r\nSession: %s\r\n", p->sreqcmd.CSeq, p->sessionstr);
++   strcat(Request, buffer);
++      
++   if (p->sreqcmd.SETUP_Transport != NULL)
++   {
++      sprintf(buffer, "Transport: %s\r\n", p->sreqcmd.SETUP_Transport);
++      strcat(Request, buffer);
++   }
++   strcat(Request, "\r\n");
++   return 1;
++}
++
++
++/**
++** Build the request of a DESCRIBE command
++**/
++static int BuildDescribeRequest(struct rtsp_pvt *p, char *Request)
++{
++   char   cmd_buffer[1024];
++   
++   sprintf(Request, "DESCRIBE %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   
++   sprintf(cmd_buffer, "%i\r\n", p->sreqcmd.CSeq);
++   strcat(Request, cmd_buffer);
++   strcat(Request, "\r\n");
++   
++   return 1;
++}
++
++/**
++** Build the request of a ANNOUNCE command
++**/
++static int BuildAnnounceRequest(struct rtsp_pvt *p, char *Request)
++{
++   char   cmd_buffer[1024];
++   char   data_buffer[1024];
++   
++   sprintf(Request, "ANNOUNCE %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   
++   sprintf(cmd_buffer, "%i\r\n", p->sreqcmd.CSeq);
++   strcat(Request, cmd_buffer);
++   sprintf(cmd_buffer,"Content-Type: application/sdp\r\n");
++   strcat(Request, cmd_buffer);
++/*
++   sprintf(data_buffer,"v=0\r\n"
++      "o=root 0 0 IN IP4 127.0.0.1\r\n"
++      "s=session\r\n"
++      "c=IN IP4 127.0.0.1\r\n"
++      "t=0 0\r\n"
++      "m=video 0 RTP/AVP 103 125 31\r\n"
++      "a=rtpmap:31 H261/90000\r\n"
++      "a=rtpmap:103 H263-1998/90000\r\n"
++      //"a=fmtp:103 QCIF=1 CIF=1 I=1 J=1 K=1 MaxBR=1960\r\n" //The allowed optional parameters for the annexes are "I", "J", "K".
++      "a=fmtp:103 QCIF=1 CIF=1 I=1 J=1 K=1\r\n"
++      "a=rtpmap:125 H264/90000\r\n"
++      "a=control:trackID=1\r\n"
++      "m=audio 0 RTP/AVP 0 8\r\n"
++      "a=rtpmap:0 PCMU/8000\r\n"
++      "a=rtpmap:8 PCMA/8000\r\n"
++      "a=control:trackID=2\r\n");
++*/
++   sprintf(data_buffer,"v=0\r\n"
++      "o=root 0 0 IN IP4 127.0.0.1\r\n"
++      "s=session\r\n"
++      "c=IN IP4 127.0.0.1\r\n"
++      "t=0 0\r\n"
++      "m=video 0 RTP/AVP 99\r\n"
++      "a=rtpmap:99 H264/90000\r\n"
++      "a=fmtp:99 profile-level-id=42e00a; packetization-mode=1; max-br=196; max-mbps=11880\r\n"
++      "a=control:trackID=1\r\n"
++      "m=audio 0 RTP/AVP 0 8\r\n"
++      "a=rtpmap:0 PCMU/8000\r\n"
++      "a=rtpmap:8 PCMA/8000\r\n"
++      "a=control:trackID=2\r\n");
++
++   sprintf(cmd_buffer,"Content-Length: %ld\r\n\r\n", (unsigned long)strlen(data_buffer));
++   strcat(Request, cmd_buffer);
++   strcat(Request, data_buffer);
++   
++   return 1;
++}
++
++/**
++** Build the request of a RECORD command
++**/
++static int BuildRecordRequest(struct rtsp_pvt *p, char *Request)
++{
++   char   buffer[512];
++   
++   sprintf(Request, "RECORD %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   sprintf(buffer, "%i\r\n", p->sreqcmd.CSeq);
++   strcat(Request, buffer);
++   
++   if (p->sreqcmd.Session == 0)
++   {
++      sprintf(buffer, "Session: %s\r\n", p->sessionstr);
++      strcat(Request, buffer);
++   }
++
++   //sprintf(buffer, "Range: npt=0.0-\r\n");
++   //strcat(Request, buffer);
++   
++   strcat(Request, "\r\n");
++   return 1;
++}
++
++
++
++/**
++** Build the request of a PLAY command
++**/
++static int BuildPlayRequest(struct rtsp_pvt *p, char *Request)
++{
++   char   buffer[512];
++   
++   sprintf(Request, "PLAY %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   sprintf(buffer, "%i\r\n", p->sreqcmd.CSeq);
++   strcat(Request, buffer);
++   
++   if (p->sreqcmd.Session == 0)
++   {
++      sprintf(buffer, "Session: %s\r\n", p->sessionstr);
++      strcat(Request, buffer);
++   }
++   
++   if (p->sreqcmd.PLAY_Range[0] != '\0')
++   {
++      sprintf(buffer, "Range: %s\r\n", p->sreqcmd.PLAY_Range);
++      strcat(Request, buffer);
++   }
++   else
++   {
++      sprintf(buffer, "Range: npt=0.0-\r\n");
++      strcat(Request, buffer);
++   }
++   strcat(Request, "\r\n");
++   return 1;
++}
++
++/**
++** Build the request of a TEARDOWN command
++**/
++static int BuildTeardownRequest(struct rtsp_pvt *p, char *Request)
++{
++   char   buffer[512];
++   
++   sprintf(Request, "TEARDOWN %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   sprintf(buffer, "%i\r\nSession: %s\r\n", p->sreqcmd.CSeq, p->sessionstr);
++   strcat(Request, buffer);
++      
++   strcat(Request, "\r\n");
++   return 1;
++}
++
++
++/**
++** Build the request of a PAUSE command
++**/
++static int BuildPauseRequest(struct rtsp_pvt *p, char *Request)
++{
++   char   buffer[512];
++    
++   sprintf(Request, "PAUSE %s %s\r\nCSeq: ", p->sreqcmd.Location, RTSP_PROTOCOL);
++   sprintf(buffer, "%i\r\n", p->sreqcmd.CSeq);
++   strcat(Request, buffer);
++   
++   if (p->sreqcmd.Session == 0)
++   {
++      sprintf(buffer, "Session: %s\r\n", p->sessionstr);
++      strcat(Request, buffer);
++   }
++      
++   strcat(Request, "\r\n");
++   return 1;
++}
++
++/*************************************************************************************************************/
++/*                              RTSP Communication Functions                                                 */
++/*************************************************************************************************************/
++
++/**
++ ** Create the RTSP session
++ **/
++int RTSP_Create(struct rtsp_pvt *p, char *url_str)
++{
++   memset(&p->rtspsession, 0, sizeof(p->rtspsession));
++ 
++   if (url_str == NULL) 
++   {
++      ast_log(LOG_WARNING, "URL passed is NULL\n");
++      return 0;
++   }
++
++   RTSP_Parse_URL(p, url_str);
++  
++   /* Verification si le type de protcole de l'URL est supporté */
++   if (p->rtspsession.url.scheme[0] == '\0')
++   {
++      ast_log(LOG_WARNING, "Could not parse the URL\n");
++      return 0;
++   }
++   if (strncmp(p->rtspsession.url.scheme, "rtsp", 4)) 
++   {
++      ast_log(LOG_WARNING, "Unsupported URL\n");
++      return 0;
++   }
++   if (p->rtspsession.url.port == 0) 
++   {
++      p->rtspsession.url.port = 554; /* Port par defaut du RTSP */
++      ast_log(LOG_DEBUG, "No port specified, using default (Port : %i).\n", p->rtspsession.url.port);
++   }
++   
++   /* Initialisation de cseq du serveur RTSP. */
++   p->rtspsession.cseq_tx = 1;
++   
++   /* Initialisation du port du client sur le flux RTP */
++   return 1;
++}
++
++/**
++** Connect to send a RTSP request
++**/
++static int RTSP_Connect(struct rtsp_pvt *p)
++{
++   struct ast_sockaddr sin;
++   int flags;
++
++   //ast_log(LOG_DEBUG, "Connect to : scheme[%s] host[%s] port[%d] rep[%s]\n", p->rtspsession.url.scheme, p->rtspsession.url.host, p->rtspsession.url.port, p->rtspsession.url.rep);
++   if (p->rtspsession.url.host == NULL || p->rtspsession.url.port == 0)
++   {
++      ast_log(LOG_WARNING, "Parameter is incorrect\n");
++      return 0;
++   }
++   
++   p->rtspsession.connected = 0;
++   
++   memset(&sin, 0, sizeof(sin));
++
++   // To enable IPv6, should decide if AF_INET6
++   if (ast_sockaddr_resolve_first_af(&sin, p->rtspsession.url.host, 0, AF_INET)) {
++      ast_log(LOG_WARNING, "Unable to lookup host '%s'\n", p->rtspsetup.server_ip);
++      return 0;
++   }
++   ast_sockaddr_set_port(&sin, p->rtspsession.url.port);
++
++   /* Start a TCP socket */
++   if ((p->rtspsession.sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
++   {
++      ast_log(LOG_WARNING, "TCP socket() failed\n");
++      return 0;
++   }
++        
++   if (ast_connect(p->rtspsession.sock, &sin) != 0)
++   {
++      ast_log(LOG_WARNING, "Connect failed to %s:%d\n", p->rtspsession.url.host, p->rtspsession.url.port);
++      return 0;
++   }
++   
++   flags = fcntl(p->rtspsession.sock, F_GETFL, 0);
++   fcntl(p->rtspsession.sock, F_SETFL, flags | O_NONBLOCK);
++   
++   p->rtspsession.connected = 1;
++   return 1;
++}
++
++/**
++** Send a RTSP request
++**/
++static int RTSP_Send(struct rtsp_pvt *p,  char *msg)
++{
++   int total = 0; // how many bytes we've sent
++   int bytesleft = 0; // how many we have left to send
++	int n = 0, len = 0;
++   
++   if (msg == NULL)
++   {
++      ast_log(LOG_WARNING, "Message is NULL!\n");
++      return 0;
++   }
++   
++   if (!p->rtspsession.connected)
++   {
++      if (RTSP_Connect(p) < 0)
++      {
++         ast_log(LOG_WARNING, "Could not connect to the server\n");
++         return 0;
++      }
++   }
++   len = strlen(msg);
++   bytesleft = len;
++     
++   while(total < len) 
++   {
++      if ((n = send(p->rtspsession.sock, msg+total, bytesleft, 0)) < 0) 
++      {
++         ast_log(LOG_WARNING, "send() failed on sock %d with error %d: %s\n", p->rtspsession.sock, errno, msg);
++         p->rtspsession.connected = 0;
++         close(p->rtspsession.sock);
++         p->rtspsession.sock = -1;
++         return 0;
++      }
++      total += n;
++      bytesleft -= n;
++      // this sleep should only occur if total != len
++      if (total != len) usleep(1000);
++   }
++   if (rtspdebug)
++      ast_verbose("<--- Transmiting RTSP %d bytes to sock %d --->\n%s<------------>\n", len, p->rtspsession.sock, msg);
++   
++   return 1;
++}
++
++/**
++** Receive a RTSP reply
++**/
++static int RTSP_Receive(struct rtsp_pvt *p)
++{
++   char     buffer[4096];
++	int      bufferSize = 4095; /* One less for finall \0 */
++   int      i = 0, end = 0;
++   int  bufferLen = 0;
++   int  responseLen = 0;
++   int  contentLength = 0;
++   int audiocap = 0;
++
++   memset(buffer, 0, sizeof(buffer));
++
++   while (i < 5)
++   {
++      // See if sockets have activity
++      if (!RtspRecvResponse(p,buffer,&bufferLen,bufferSize,&end))
++      {
++         if (end)
++         {
++            p->rtspsession.cseq_tx++;
++            return 0;
++         }
++         usleep(10000); //10ms
++         continue;
++      }
++      if (p->sreqcmd.NbCommand == DESCRIBE_CMD)
++      {
++         /* If not reading content */
++         if (contentLength==0)
++         {
++            /* Search end of response */
++            if ( (responseLen=GetResponseLen(buffer)) == 0 ) continue;
++      
++            /* Does it have content */
++            contentLength = GetHeaderValueInt(buffer,responseLen,"Content-Length");	
++            /* Is it sdp */
++            if (!CheckHeaderValue(buffer,responseLen,"Content-Type", "application/sdp"))
++            {
++               /* log */
++               ast_log(LOG_ERROR,"Content-Type unknown\n");
++               
++               p->rtspsession.cseq_tx++;
++               /* End */
++               return 0;
++            }
++         }
++         if (contentLength + contentLength > bufferSize)
++         {
++            /* log */
++            ast_log(LOG_ERROR,"Contents too big for buffer!\n");
++         
++            p->rtspsession.cseq_tx++;
++            /* End */
++
++            return 0;
++         }
++         /* If there is not enough data */	
++         if (bufferLen<contentLength + responseLen) continue;
++   
++         /* Create SDP */
++         if (!CreateSDP(p, buffer+responseLen, contentLength))
++         {
++            ast_log(LOG_ERROR,"SDP parsing failed\n");
++            p->rtspsession.cseq_tx++;
++            return 0;
++         }
++         /* Reset content */
++         contentLength = 0;
++
++         ast_log(LOG_DEBUG, "Our capabilities are %d \n", p->capability);
++
++         // Set Audio Codecs
++         for (i = 0; i < p->rtspsession.sdp[AUDIO_SDP].num; i++)
++         {
++            if (p->rtp) 
++            {
++               ast_log(LOG_DEBUG, "Setting audio codec %s to payload %d\n", 
++                  p->rtspsession.sdp[AUDIO_SDP].formats[i].name, 
++                  p->rtspsession.sdp[AUDIO_SDP].formats[i].payload);
++
++               ast_rtp_codecs_payloads_set_m_type(ast_rtp_instance_get_codecs(p->rtp), p->rtp, p->rtspsession.sdp[AUDIO_SDP].formats[i].payload);
++
++               ast_rtp_codecs_payloads_set_rtpmap_type(ast_rtp_instance_get_codecs(p->rtp), p->rtp, p->rtspsession.sdp[AUDIO_SDP].formats[i].payload,
++                  "audio", p->rtspsession.sdp[AUDIO_SDP].formats[i].name, 0);
++            }
++            if (p->rtspsession.sdp[AUDIO_SDP].formats[i].format & p->capability) audiocap = 1;
++         }
++//          if (!audiocap)
++//          {
++//             ast_log(LOG_ERROR, "Chan capabilities do not support audio codec\n");
++//             p->rtspsession.cseq_tx++;
++//             return 0;
++//          }
++         // Set Video Codecs
++         for (i = 0; i < p->rtspsession.sdp[VIDEO_SDP].num; i++)
++         {
++            if (p->vrtp) 
++            {
++               ast_log(LOG_DEBUG, "Setting video codec %s to payload %d\n", 
++                  p->rtspsession.sdp[VIDEO_SDP].formats[i].name, 
++                  p->rtspsession.sdp[VIDEO_SDP].formats[i].payload);
++
++               ast_rtp_codecs_payloads_set_m_type(ast_rtp_instance_get_codecs(p->vrtp), p->vrtp, p->rtspsession.sdp[VIDEO_SDP].formats[i].payload);
++
++               // THIS ENABLES RADVISION GATEWAY TO PLAY H263++ VIDEOS
++               if (p->rtspsession.sdp[VIDEO_SDP].formats[i].format == AST_FORMAT_H263_PLUS_PLUS)
++                  ast_rtp_codecs_payloads_set_rtpmap_type(ast_rtp_instance_get_codecs(p->vrtp), p->vrtp, p->rtspsession.sdp[VIDEO_SDP].formats[i].payload,
++                     "video", "H263-1998", 0);
++               else
++                  ast_rtp_codecs_payloads_set_rtpmap_type(ast_rtp_instance_get_codecs(p->vrtp), p->vrtp, p->rtspsession.sdp[VIDEO_SDP].formats[i].payload,
++                     "video", p->rtspsession.sdp[VIDEO_SDP].formats[i].name, 0);
++            }
++         }
++
++         break;
++      } // if (p->sreqcmd.NbCommand == DESCRIBE_CMD)
++      else
++      {
++         /* Search end of response */
++         if ( (responseLen = GetResponseLen(buffer)) == 0 )
++            /*Exit*/
++            continue;
++   
++         /* Does it have content */
++         if (GetHeaderValueInt(buffer,responseLen,"Content-Length"))
++         {
++            /* log */
++            ast_log(LOG_ERROR,"Content length not expected\n");
++            /* Uh? */
++            p->rtspsession.cseq_tx++;
++            return 0;
++         }
++         break;
++      }
++   }
++   if (!ParseReceiveResponse(p, buffer))
++   {
++      ast_log(LOG_NOTICE, "RTSP_Receive: ParseReceiveResponse outside 200 OK\n");
++      p->rtspsession.cseq_tx++;
++      return 0;
++   }
++   p->rtspsession.cseq_tx++;
++
++   return 1;
++}
++
++/**
++** Send TEARDOWN request
++**/
++int RTSP_Teardown(struct rtsp_pvt *p)
++{
++   char        msg[1024];
++   int retval;
++   
++   if (p->sreqcmd.NbCommand <= TEARDOWN_CMD)
++   {
++      p->rtspsession.connected = 0;
++      if (p->rtspsession.sock > 0) 
++      {
++         close(p->rtspsession.sock);
++         p->rtspsession.sock = -1;
++      }
++      
++      return 1;
++   }
++
++   memset(msg, 0, sizeof(msg));
++   p->sreqcmd.CSeq = p->rtspsession.cseq_tx;
++   p->sreqcmd.NbCommand = TEARDOWN_CMD;
++
++   BuildTeardownRequest(p, msg);
++
++   if ((retval = RTSP_Send(p, msg)) == 0)
++   {
++      ast_log(LOG_WARNING, "RTSP_Send() Failed\n");
++      return 0;
++   }
++   if ((retval = RTSP_Receive(p)) == 0) 
++   {
++      if (rtspdebug)
++         ast_verbose("<--- RTSP_Teardown() socket closed --->\n");
++   }
++   
++   p->rtspsession.connected = 0;
++   if (p->rtspsession.sock > 0) 
++   {
++      close(p->rtspsession.sock);
++      p->rtspsession.sock = -1;
++   }
++   p->sreqcmd.NbCommand = 0;
++
++   return 1;
++}
++
++/*************************************************************************************************************/
++/*                              RTSP Auxiliar Functions                                                      */
++/*************************************************************************************************************/
++
++/**
++** GetNumberLines
++**/ 
++static int GetNumberLines(char *f)
++{
++   int				j = 0;
++   int				nb_lines = 0;
++   
++   while ((f[j]) != '\0')
++   {
++      if ((f[j] == '\r') && (f[j + 1] == '\n'))
++      {
++         j = j + 2;
++         nb_lines++;
++         if ((f[j] == '\r') && (f[j + 1] == '\n'))
++         {
++            j = j + 2;
++            return (nb_lines);
++         }
++      }
++      j++;
++   }
++   return (nb_lines);
++}
++
++
++/**
++** GetResponsevalue
++**/
++static int GetResponsevalue(char *f)
++{
++   int				j;
++   int				i;
++   int				value = 0;
++   char				buff[10];
++   char				c_value[4];
++   
++   memset(buff, 0, sizeof(buff));
++   memset(c_value, 0, sizeof(c_value));
++
++   for (i = 0; ((i < 9) && (f[i] != '\0')); i++)
++   {
++      buff[i] = f[i];
++   }
++   if (strncmp(buff, "RTSP/1.0 ", 9))
++      return 0;
++   for (j = 0;((j < 3) && (f[i] != '\0')); i++, j++)
++   {
++      c_value[j] = f[i];
++   }
++   value = atoi(c_value);
++   return (value);
++}
++
++
++/**
++** GetNameHeader
++**/
++static int GetNameHeader(char *f, int current_line, header_t *header)
++{
++   char				buff[512];
++   int				line = 0;
++   int				i;
++   int				j = 0;
++   
++   while ((f[j] != '\0') && (line < current_line))
++   {
++      if ((f[j] == '\r') && (f[j + 1] == '\n'))
++      {
++         line++;
++         j++;
++      }
++      j++;
++   }
++   
++   for (i = 0; ((f[j] != '\0') && (f[j] != ':')); i++, j++)
++   {
++      buff[i] = f[j];
++   }
++   buff[i] = '\0';
++   strcpy(header->name, buff);
++   
++   if (f[j] == ':') j++;
++   memset(buff, 0, 512);
++   
++   for (i = 0; ((f[j] != EOF) && (f[j] != '\r')); i++, j++)
++   {
++      if (f[j] == ' ')
++         i--;
++      else
++         buff[i] = f[j];
++   }
++   buff[i] = '\0';
++   strcpy(header->value, buff);
++
++   return 1;
++}
++
++/**
++** GetReqCmd
++**/
++static void GetReqCmd(struct rtsp_pvt *p, header_t header)
++{
++   if (!strncmp(header.name, "CSeq", 4))
++   {
++      p->rreqcmd.CSeq = atoi(header.value);
++      return;
++   }
++   else if (!strncmp(header.name, "Location", 8))
++   {
++      strcpy(p->rreqcmd.Location, header.value);
++      return;
++   }
++   else if (!strncmp(header.name, "Range", 7))
++   {
++      strcpy(p->rreqcmd.PLAY_Range, header.value);
++      return;
++   }   
++   else if (!strncmp(header.name, "Session", 7))
++   {
++      p->rreqcmd.Session = atoi(header.value);
++      memset(p->sessionstr, 0, sizeof(p->sessionstr));
++      strncpy(p->sessionstr, header.value, sizeof(p->sessionstr));
++      return;
++   }
++   else if (!strncmp(header.name, "Transport", 9))
++   {
++      strcpy(p->rreqcmd.SETUP_Transport, header.value);
++      return;
++   }   
++}
++
++//- RTP functions ----------------------------------------------------------------------------------------------
++/**
++** rtsp_get_rtp_peer function
++**/
++static enum ast_rtp_glue_result rtsp_get_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance **rtp)
++{
++   struct rtsp_pvt *p = NULL;
++   enum ast_rtp_glue_result res = AST_RTP_GLUE_RESULT_LOCAL;
++
++   if (!(p = chan->tech_pvt)) {
++      return AST_RTP_GLUE_RESULT_FORBID;
++   }
++
++   ast_mutex_lock(&p->lock);
++   if (!(p->rtp)) {
++      ast_mutex_unlock(&p->lock);
++      return AST_RTP_GLUE_RESULT_FORBID;
++   }
++
++   ao2_ref(p->rtp, +1);
++   *rtp = p->rtp;
++
++   ast_mutex_unlock(&p->lock);
++
++   return res;
++}
++
++/**
++** rtsp_get_vrtp_peer function
++**/
++static enum ast_rtp_glue_result rtsp_get_vrtp_peer(struct ast_channel *chan, struct ast_rtp_instance **rtp)
++{
++   struct rtsp_pvt *p = NULL;
++
++   if (!(p = chan->tech_pvt)) {
++      return AST_RTP_GLUE_RESULT_FORBID;
++   }
++
++   ast_mutex_lock(&p->lock);
++   if (!(p->vrtp)) {
++      ast_mutex_unlock(&p->lock);
++      return AST_RTP_GLUE_RESULT_FORBID;
++   }
++
++   ao2_ref(p->vrtp, +1);
++   *rtp = p->vrtp;
++
++   ast_mutex_unlock(&p->lock);
++
++   return AST_RTP_GLUE_RESULT_REMOTE;
++}
++
++/**
++** rtsp_set_rtp_peer function
++**/
++static int rtsp_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance *rtp, struct ast_rtp_instance *vrtp, struct ast_rtp_instance *tinstance, format_t codecs, int nat_active)
++{
++   struct rtsp_pvt *p;
++   p = chan->tech_pvt;
++
++   if (!p) {
++      return -1;
++   }
++
++   if (rtp) {
++      ast_rtp_instance_get_and_cmp_remote_address(rtp, &p->redirip);
++   } else if (!ast_sockaddr_isnull(&p->redirip)) {
++      memset(&p->redirip, 0, sizeof(p->redirip));
++   }
++   if (vrtp) {
++      ast_rtp_instance_get_and_cmp_remote_address(vrtp, &p->vredirip);
++   } else if (!ast_sockaddr_isnull(&p->vredirip)) {
++      memset(&p->vredirip, 0, sizeof(p->vredirip));
++   }
++
++   set_port(p, rtp, vrtp);
++   return 0;
++
++}
++
++/**
++** rtsp_get_codec function
++**/
++static format_t rtsp_get_codec(struct ast_channel *chan)
++{
++   struct rtsp_pvt *p = chan->tech_pvt;
++   return p->capability;
++}
++
++/* rtsp_rtp struct */
++static struct ast_rtp_glue rtsp_rtp = {
++   .type = type,
++   .get_rtp_info = rtsp_get_rtp_peer,
++   .get_vrtp_info = rtsp_get_vrtp_peer,
++   .update_peer = rtsp_set_rtp_peer,
++   .get_codec = rtsp_get_codec,
++};
++
++/*************************************************************************************************************/
++/*                                                                                                           */
++/*                              Module Functions                                                             */
++/*                                                                                                           */
++/*************************************************************************************************************/
++/*! \brief Turn on RTSP debugging (CLI command) */
++static char *rtsp_do_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
++{
++   int oldrtspdebug = rtspdebug;
++   const char *what;
++
++   if (cmd == CLI_INIT) {
++      e->command = "rtsp set debug {on|off}";
++      e->usage =
++         "Usage: rtsp set debug {off|on}\n"
++         "       Enables dumping of RTSP packets for debugging purposes.\n";
++      return NULL;
++   } else if (cmd == CLI_GENERATE) {
++      return NULL;
++        }
++
++   what = a->argv[e->args-1];      /* guaranteed to exist */
++   if (a->argc == e->args) {       /* on/off */
++      if (!strcasecmp(what, "on")) {
++         rtspdebug = 1;
++         ast_cli(a->fd, "RTSP Debugging %senabled\n", oldrtspdebug ? "re-" : "");
++         return CLI_SUCCESS;
++      } else if (!strcasecmp(what, "off")) {
++         rtspdebug = 0;
++         ast_cli(a->fd, "RTSP Debugging Disabled\n");
++         return CLI_SUCCESS;
++      }
++   }
++   return CLI_SHOWUSAGE;   /* default, failure */
++}
++
++static struct ast_cli_entry cli_rtsp[] = {
++      AST_CLI_DEFINE(rtsp_do_debug, "Enable/Disable RTSP debugging"),
++};
++
++/* load_module */
++static int load_module(void)
++{
++   int res=0;
++   
++   res = reload_config();
++   
++   if (res) {
++      return 0;
++   } else {
++      if (!(sched = sched_context_create())) {
++         ast_log(LOG_ERROR, "Unable to create scheduler context\n");
++         return AST_MODULE_LOAD_FAILURE;
++      }
++
++      if (!(io = io_context_create())) {
++         ast_log(LOG_ERROR, "Unable to create I/O context\n");
++         sched_context_destroy(sched);
++         return AST_MODULE_LOAD_FAILURE;
++      }
++      /* Make sure we can register our channel type */
++      if (ast_channel_register(&rtsp_tech)) {
++         ast_log(LOG_ERROR, "Unable to register channel class %s\n", type);
++         io_context_destroy(io);
++         sched_context_destroy(sched);
++         return AST_MODULE_LOAD_FAILURE;
++      }
++      /* Register all CLI functions for RTSP */
++      ast_cli_register_multiple(cli_rtsp, ARRAY_LEN(cli_rtsp));
++      
++      /* Tell the RTP subdriver that we're here */
++      ast_rtp_glue_register(&rtsp_rtp);
++   }
++   return res;
++}
++
++/* unload_module */
++static int unload_module(void)
++{  
++   ast_sched_dump(sched);
++
++   /* unregister channel type */
++   ast_channel_unregister(&rtsp_tech);
++   
++   /* Unregister CLI commands */
++   ast_cli_unregister_multiple(cli_rtsp, ARRAY_LEN(cli_rtsp));
++
++   /* Disconnect from the RTP subsystem */
++   ast_rtp_glue_unregister(&rtsp_rtp);
++
++   sched_context_destroy(sched);
++
++   return 0;
++}
++
++/* reload_config */
++static int reload_config(void)
++{
++   struct ast_config *cfg;
++   struct ast_variable *v;
++   struct ast_flags config_flags = { 0 };
++   int bindport = 0;
++
++   global_rtptimeout = 0;
++   global_rtpholdtimeout = 0;
++   global_tos_audio = DEFAULT_TOS_AUDIO;
++   global_tos_video = DEFAULT_TOS_VIDEO;
++   global_cos_audio = DEFAULT_COS_AUDIO;
++   global_cos_video = DEFAULT_COS_VIDEO;
++   use_rtcp = 0;
++   
++   cfg = ast_config_load(config, config_flags);
++   
++   /* We *must* have a config file otherwise stop immediately */
++   if (!cfg) {
++      ast_log(LOG_NOTICE, "Unable to load config %s, RTSP disabled\n", config);
++      return 0;
++   }
++
++   ast_sockaddr_parse(&bindaddr, "0.0.0.0:0", 0);
++   
++   /* Initialize some reasonable defaults */
++   strncpy(context, "default", sizeof(context) - 1);
++
++   v = ast_variable_browse(cfg, "general");
++   while(v) 
++   {
++      /* Create the interface list */
++      if (!strcasecmp(v->name, "context")) 
++      {
++         strncpy(context, v->value, sizeof(context)-1);
++      } 
++      else if (!strcasecmp(v->name, "bindaddr")) 
++      {
++         if (ast_parse_arg(v->value, PARSE_ADDR, &bindaddr))
++         {
++            ast_log(LOG_WARNING, "Invalid address: %s\n", v->value);
++         } 
++      } else if (!strcasecmp(v->name, "bindport")) {
++         if (sscanf(v->value, "%5d", &bindport) != 1) {
++            ast_log(LOG_WARNING, "Invalid port number '%s' at line %d of %s\n", v->value, v->lineno, config);
++         }
++      } else if (!strcasecmp(v->name, "rtptimeout")) {
++         if ((sscanf(v->value, "%30d", &global_rtptimeout) != 1) || (global_rtptimeout < 0)) {
++            ast_log(LOG_WARNING, "'%s' is not a valid RTP hold time at line %d.  Using default.\n", v->value, v->lineno);
++            global_rtptimeout = 0;
++         }
++      } else if (!strcasecmp(v->name, "rtpholdtimeout")) {
++         if ((sscanf(v->value, "%30d", &global_rtpholdtimeout) != 1) || (global_rtpholdtimeout < 0)) {
++            ast_log(LOG_WARNING, "'%s' is not a valid RTP hold time at line %d.  Using default.\n", v->value, v->lineno);
++            global_rtpholdtimeout = 0;
++         }
++      } else if (!strcasecmp(v->name, "tos_audio")) {
++         if (ast_str2tos(v->value, &global_tos_audio)) {
++            ast_log(LOG_WARNING, "Invalid tos_audio value at line %d, refer to QoS documentation\n", v->lineno);
++         }
++      } else if (!strcasecmp(v->name, "tos_video")) {
++         if (ast_str2tos(v->value, &global_tos_video)) {
++            ast_log(LOG_WARNING, "Invalid tos_video value at line %d, refer to QoS documentation\n", v->lineno);
++         }
++      } else if (!strcasecmp(v->name, "cos_audio")) {
++         if (ast_str2cos(v->value, &global_cos_audio)) {
++            ast_log(LOG_WARNING, "Invalid cos_audio value at line %d, refer to QoS documentation\n", v->lineno);
++         }
++      } else if (!strcasecmp(v->name, "cos_video")) {
++         if (ast_str2cos(v->value, &global_cos_video)) {
++            ast_log(LOG_WARNING, "Invalid cos_video value at line %d, refer to QoS documentation\n", v->lineno);
++         }
++      } else if (!strcasecmp(v->name, "rtspdebug")) {
++         if (ast_true(v->value))
++            rtspdebug = 1;
++      } else if (!strcasecmp(v->name, "rtcp")) {
++         if (ast_true(v->value))
++            use_rtcp = 1;
++      } 
++      v = v->next;
++   }
++   if (bindport) {
++      if (ast_sockaddr_port(&bindaddr)) {
++         ast_log(LOG_WARNING, "bindport is also specified in bindaddr. "
++            "Using %d.\n", bindport);
++      }
++      ast_sockaddr_set_port(&bindaddr, bindport);
++   }
++   ast_sockaddr_copy(&internip, &bindaddr);
++   if (ast_find_ourip(&internip, &bindaddr, 0)) {
++      ast_log(LOG_WARNING, "Unable to get own IP address, RTSP disabled\n");
++      ast_config_destroy(cfg);
++      return 0;
++   }
++   if (!ast_sockaddr_port(&bindaddr)) {
++      ast_sockaddr_set_port(&bindaddr, DEFAULT_RTSP_PORT);
++   }
++
++   ast_mutex_lock(&netlock);
++   ast_mutex_unlock(&netlock);
++
++   ast_config_destroy(cfg);
++   return 0;
++}
++
++AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Real Time Streaming Protocol (RTSP)");
++
