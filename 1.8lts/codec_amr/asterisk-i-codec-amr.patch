@@ -69594,3 +69594,25 @@ diff -Naur asterisk-1.8.3.2_com_rtsp/main/rtp_engine.c asterisk-1.8.3.2_com_amr/
  	[110] = {1, AST_FORMAT_SPEEX},
  	[111] = {1, AST_FORMAT_G726},
  	[112] = {1, AST_FORMAT_G726_AAL2},
+diff -Naur asterisk-1.8.3.2_com_rtsp/menuselect-tree asterisk-1.8.3.2_com_amr/menuselect-tree
+--- asterisk-1.8.3.2_com_rtsp/menuselect-tree	2012-03-19 15:21:29.000000000 +0000
++++ asterisk-1.8.3.2_com_amr/menuselect-tree	2012-03-26 16:31:57.000000000 +0100
+@@ -159,6 +159,8 @@
+ 	<depend>tonezone</depend>
+ 	<defaultenabled>no</defaultenabled>
+ </member>
++<member name="app_rtsp" displayname="RTSP applications" remove_on_change="apps/app_rtsp.o apps/app_rtsp.so">
++</member>
+ <member name="app_saycounted" displayname="Decline words according to channel language" remove_on_change="apps/app_saycounted.o apps/app_saycounted.so">
+ 	<defaultenabled>no</defaultenabled>
+ </member>
+@@ -358,6 +360,9 @@
+ </member>
+ <member name="codec_alaw" displayname="A-law Coder/Decoder" remove_on_change="codecs/codec_alaw.o codecs/codec_alaw.so">
+ </member>
++<member name="codec_amr" displayname="AMR Coder/Decoder" remove_on_change="codecs/codec_amr.o codecs/codec_amr.so">
++	
++</member>
+ <member name="codec_a_mu" displayname="A-law and Mulaw direct Coder/Decoder" remove_on_change="codecs/codec_a_mu.o codecs/codec_a_mu.so">
+ </member>
+ <member name="codec_dahdi" displayname="Generic DAHDI Transcoder Codec Translator" remove_on_change="codecs/codec_dahdi.o codecs/codec_dahdi.so">

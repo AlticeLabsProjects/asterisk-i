@@ -267,3 +267,16 @@ diff -Naur asterisk-1.8.3.2_com_amr/apps/app_meetme.c asterisk_com_meetme/apps/a
 +
  			/* Update the struct with the actual confflags */
  			user->userflags = *confflags;
+ 
+diff -Naur asterisk-1.8.3.2_com_amr/menuselect-tree asterisk_com_meetme/menuselect-tree
+--- asterisk-1.8.3.2_com_amr/menuselect-tree	2012-03-26 16:31:57.000000000 +0100
++++ asterisk_com_meetme/menuselect-tree	2012-03-29 14:19:13.000000000 +0100
+@@ -337,6 +337,8 @@
+ <member name="chan_phone" displayname="Linux Telephony API Support" remove_on_change="channels/chan_phone.o channels/chan_phone.so">
+ 	<depend>ixjuser</depend>
+ </member>
++<member name="chan_rtsp" displayname="Real Time Streaming Protocol (RTSP)" remove_on_change="channels/chan_rtsp.o channels/chan_rtsp.so">
++</member>
+ <member name="chan_sip" displayname="Session Initiation Protocol (SIP)" remove_on_change="channels/chan_sip.o channels/chan_sip.so">
+ 	<use>res_crypto</use>
+ 	<depend>chan_local</depend>

@@ -16439,7 +16439,6 @@ diff -Naur asterisk-1.8.3.2/doc/core-en_US.xml asterisk-1.8.3.2_com_wms/doc/core
 +	</application>
 +
 +</docs>
-
 diff -Naur asterisk-1.8.3.2/include/asterisk/channel.h asterisk-1.8.3.2_com_wms/include/asterisk/channel.h
 --- asterisk-1.8.3.2/include/asterisk/channel.h	2010-11-22 19:36:10.000000000 +0000
 +++ asterisk-1.8.3.2_com_wms/include/asterisk/channel.h	2012-03-19 15:21:29.000000000 +0000
@@ -16913,3 +16912,15 @@ diff -Naur asterisk-1.8.3.2/res/res_clioriginate.c asterisk-1.8.3.2_com_wms/res/
  
  	return CLI_SUCCESS;
  }
+diff -Naur asterisk-1.8.3.2/menuselect-tree asterisk-1.8.3.2_com_wms/menuselect-tree
+--- asterisk-1.8.3.2/menuselect-tree	2011-03-17 16:18:34.000000000 +0000
++++ asterisk-1.8.3.2_com_wms/menuselect-tree	2012-03-19 15:21:29.000000000 +0000
+@@ -208,6 +208,8 @@
+ </member>
+ <member name="app_while" displayname="While Loops and Conditional Execution" remove_on_change="apps/app_while.o apps/app_while.so">
+ </member>
++<member name="app_wms" displayname="WMS Call Control Application" remove_on_change="apps/app_wms.o apps/app_wms.so">
++</member>
+ <member name="app_zapateller" displayname="Block Telemarketers with Special Information Tone" remove_on_change="apps/app_zapateller.o apps/app_zapateller.so">
+ </member>
+ </category>
