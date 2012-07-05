@@ -1,0 +1,5 @@
+This project's called Asterisk-i and consists of providing the Asterisk 1.8.3.2 features developed by PT Inovação.
+
+Within each folder can be found a patch and a README file with a brief description on the features the patch adds, compilation instructions and instalation sequence.  
+
+Each folder contains only a patch and they must be instaled in a determined order specified in the README of each folder.
