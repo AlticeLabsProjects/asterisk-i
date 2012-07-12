@@ -4013,7 +4013,7 @@ diff -Naur asterisk-1.8.3.2/apps/wms_inoapi.h asterisk-1.8.3.2_com_wms/apps/wms_
 +void kill_conference_thread(ast_vars *chan_vars);
 +
 +#endif 
-
+diff -Naur asterisk-1.8.3.2/doc/core-en_US.xml asterisk-1.8.3.2_com_wms/doc/core-en_US.xml
 --- asterisk-1.8.3.2/doc/core-en_US.xml	1970-01-01 01:00:00.000000000 +0100
 +++ asterisk-1.8.3.2_com_wms/doc/core-en_US.xml	2012-03-19 15:21:29.000000000 +0000
 @@ -0,0 +1,12422 @@
