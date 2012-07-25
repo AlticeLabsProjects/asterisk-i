@@ -1,7 +1,7 @@
 diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.c
 --- asterisk-1.8.3.2_orig/apps/app_rtsp.c	1970-01-01 01:00:00.000000000 +0100
 +++ asterisk-1.8.3.2/apps/app_rtsp.c	2012-03-21 10:59:08.000000000 +0000
-@@ -0,0 +1,2386 @@
+@@ -0,0 +1,2394 @@
 +/*
 + * Asterisk -- An open source telephony toolkit.
 + *
@@ -43,13 +43,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +#include <asterisk/module.h>
 +#include <asterisk/utils.h>
 +#include <asterisk/translate.h>
-+
-+#ifndef AST_FORMAT_AMRNB
-+#define AST_FORMAT_AMRNB	(1 << 13)
-+#endif 
-+#ifndef AST_FORMAT_MPEG4
-+#define AST_FORMAT_MPEG4        (1 << 22)
-+#endif
++#include <asterisk/rtp_engine.h>
 +
 +static char *name_rtsp = "rtsp";
 +static char *syn_rtsp = "rtsp player";
@@ -70,7 +64,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +
 +static struct 
 +{
-+        format_t format;
++        unsigned long long format;
 +        char* name;
 +} mimeTypes[] = {
 +	{ AST_FORMAT_G723_1, "G723"},
@@ -97,9 +91,46 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	{ AST_FORMAT_H261, "H261"},
 +	{ AST_FORMAT_H263, "H263"},
 +	{ AST_FORMAT_H263_PLUS, "H263-1998"},
-+	{ AST_FORMAT_H263_PLUS, "H263-2000"},
++	{ AST_FORMAT_H263_PLUS_PLUS, "H263-2000"},
 +	{ AST_FORMAT_H264, "H264"},
-+	{ AST_FORMAT_MPEG4, "MP4V-ES"},
++	{ AST_FORMAT_MP4_VIDEO, "MP4V-ES"},
++};
++
++#define AST_RTP_MAX_PT 256
++
++static const struct ast_rtp_payload_type static_RTP_PT[AST_RTP_MAX_PT] = {
++   [0] = {1, AST_FORMAT_ULAW},
++   #ifdef USE_DEPRECATED_G726
++   [2] = {1, AST_FORMAT_G726}, /* Technically this is G.721, but if Cisco can do it, so can we... */
++   #endif
++   [3] = {1, AST_FORMAT_GSM},
++   [4] = {1, AST_FORMAT_G723_1},
++   [5] = {1, AST_FORMAT_ADPCM}, /* 8 kHz */
++   [6] = {1, AST_FORMAT_ADPCM}, /* 16 kHz */
++   [7] = {1, AST_FORMAT_LPC10},
++   [8] = {1, AST_FORMAT_ALAW},
++   [9] = {1, AST_FORMAT_G722},
++   [10] = {1, AST_FORMAT_SLINEAR}, /* 2 channels */
++   [11] = {1, AST_FORMAT_SLINEAR}, /* 1 channel */
++   [16] = {1, AST_FORMAT_ADPCM}, /* 11.025 kHz */
++   [17] = {1, AST_FORMAT_ADPCM}, /* 22.050 kHz */
++   [18] = {1, AST_FORMAT_G729A},
++   [26] = {1, AST_FORMAT_JPEG},
++   [31] = {1, AST_FORMAT_H261},
++   [34] = {1, AST_FORMAT_H263},
++   [96] = {1, AST_FORMAT_H264},
++   [97] = {1, AST_FORMAT_ILBC},
++   [98] = {1, AST_FORMAT_AMRNB}, /* Audio AMR-NB */
++   [99] = {1, AST_FORMAT_AMRWB}, /* Audio AMR-WB */
++   [103] = {1, AST_FORMAT_H263_PLUS},
++   [104] = {1, AST_FORMAT_MP4_VIDEO},
++   [107] = {1, AST_FORMAT_H263_PLUS_PLUS},
++   [108] = {1, AST_FORMAT_MPEG4_VIDEO},
++   //MP4A-LATM
++   [109] = {1, AST_FORMAT_MPEG4_AUDIO},
++   [110] = {1, AST_FORMAT_SPEEX},
++   [111] = {1, AST_FORMAT_G726},
++   [112] = {1, AST_FORMAT_G726_AAL2},
 +};
 +
 +typedef enum 
@@ -244,7 +275,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +static void MediaStatsRR(struct MediaStats *stats, struct Rtcp *rtcp)
 +{
 +	/* Set pointer as ssrc */
-+	rtcp->r.rr.ssrc = htonl(stats);
++	rtcp->r.rr.ssrc = (unsigned int)htonl(stats->ssrc);
 +
 +	/* data source being reported */
 +	rtcp->r.rr.rr[0].ssrc		= htonl(stats->ssrc);
@@ -314,7 +345,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +static struct RtspPlayer* RtspPlayerCreate(void)
 +{
 +	/* malloc */
-+	struct RtspPlayer* player = (struct RtspPlayer*) malloc(sizeof(struct RtspPlayer));
++	struct RtspPlayer* player = (struct RtspPlayer*) calloc(1, sizeof(struct RtspPlayer));
 +	/* Initialize */
 +	player->cseq 		= 1;
 +	player->session[0]	= NULL;
@@ -361,13 +392,13 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	char clear[256];
 +
 +	/* Create authorization header */
-+	player->authorization = malloc(128);
++	player->authorization = calloc(1, 128);
 +
 +	/* Get base 64 from username and password*/
 +	sprintf(clear,"%s:%s",username,password);
 +
 +	/* Encode */
-+	ast_base64encode(base64,clear,strlen(clear),256);
++	ast_base64encode(base64,(unsigned char *)clear,strlen(clear),256);
 +
 +	/* Set heather */
 +	sprintf(player->authorization, "Authorization: Basic %s",base64);
@@ -377,7 +408,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +{
 +	struct sockaddr *sendAddr;
 +	int size;
-+	int len;
++	unsigned int len;
 +	int PF;
 +	unsigned short *port;
 +
@@ -387,7 +418,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +		/* Set size*/
 +		size = sizeof(struct sockaddr_in6);
 +		/*Create address */
-+		sendAddr = (struct sockaddr *)malloc(size);
++		sendAddr = (struct sockaddr *)calloc(1, size);
 +		/* empty addres */
 +		memset(sendAddr,0,size);
 +		/*Set family */
@@ -400,7 +431,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +		/* Set size*/
 +		size = sizeof(struct sockaddr_in);
 +		/*Create address */
-+		sendAddr = (struct sockaddr *)malloc(size);
++		sendAddr = (struct sockaddr *)calloc(1, size);
 +		/* empty addres */
 +		memset(sendAddr,0,size);
 +		/*Set family */
@@ -472,7 +503,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +		/* Set size*/
 +		*size = sizeof(struct sockaddr_in6);
 +		/*Create address */
-+		sendAddr = (struct sockaddr *)malloc(*size);
++		sendAddr = (struct sockaddr *)calloc(1, *size);
 +		/* empty addres */
 +		memset(sendAddr,0,*size);
 +		/* Set PF */
@@ -487,7 +518,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +		/* Set size*/
 +		*size = sizeof(struct sockaddr_in);
 +		/*Create address */
-+		sendAddr = (struct sockaddr *)malloc(*size);
++		sendAddr = (struct sockaddr *)calloc(1, *size);
 +		/* empty addres */
 +		memset(sendAddr,0,*size);
 +		/*Set family */
@@ -545,7 +576,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	player->port 	= port;
 +
 +	/* create hostport */
-+	player->hostport = (char*)malloc(strlen(ip)+8);
++	player->hostport = (char*)calloc(1, strlen(ip)+8);
 +
 +	/* If it is ipv6 */
 +	if (isIPv6)
@@ -972,8 +1003,8 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +
 +struct SDPFormat
 +{
-+	int 				payload;
-+	format_t		format;	
++	int 	payload;
++	int	format;	
 +	char*	control;
 +};
 +
@@ -981,7 +1012,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +{
 +	struct SDPFormat** formats;
 +	int num;
-+	format_t all;
++	int all;
 +};
 +
 +struct SDPContent
@@ -992,30 +1023,31 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +
 +static struct SDPMedia* CreateMedia(char *buffer,int bufferLen)
 +{
-+	int num = 0;
-+	int i = 0;
-+	struct SDPMedia* media = NULL;;
++	int num = 0, i = 0, saved_i = 0, j = 0;
++	struct SDPMedia* media = NULL;
 +
 +	/* Count number of spaces*/
 +	for (i=0;i<bufferLen;i++)
-+		/* If it's a withespace */
++		/* If it's a with space */
 +		if (buffer[i]==' ')
-+			/* Anopther one */
-+			num++;
++			/* Another one */
++		   if (++num == 3) saved_i = i;
 +
 +	/* if no media */
 +	if (num<3)
++	{
++      ast_log(LOG_WARNING,"no media found on SDP\n");
 +		/* Exit */
 +		return NULL;
-+
++	}
 +	/* Allocate */
-+	media = (struct SDPMedia*) malloc(sizeof(struct SDPMedia));
++	media = (struct SDPMedia*) calloc(1, sizeof(struct SDPMedia));
 +
 +	/* Get number of formats */
 +	media->num = num - 2; 
 +
 +	/* Allocate */
-+	media->formats = (struct SDPFormat**) malloc(media->num);
++	media->formats = (struct SDPFormat**) calloc(1, media->num);
 +
 +	/* Set all formats to nothing */
 +	media->all = 0;
@@ -1024,12 +1056,35 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	for (i=0;i<media->num;i++)
 +	{
 +		/* Allocate format */
-+		media->formats[i] = (struct SDPFormat*) malloc(media->num);
++		media->formats[i] = (struct SDPFormat*) calloc(1, sizeof(struct SDPFormat));
 +		/* Init params */
 +		media->formats[i]->payload 	= -1;
 +		media->formats[i]->format 	= 0;
 +		media->formats[i]->control 	= NULL;
 +	}
++
++   /* For each format */
++   for (i=saved_i;i<bufferLen;i++)
++   {
++      /* If it's a whitespace */
++      if (buffer[i]==' ')
++      {
++         /* Another one */
++         media->formats[j]->payload    = atoi(buffer + i + 1);
++
++         if (media->formats[j]->payload >= 0 && media->formats[j]->payload < AST_RTP_MAX_PT)
++            media->formats[j]->format = static_RTP_PT[media->formats[j]->payload].code;
++
++         media->all |= media->formats[j]->format;
++
++         /* Log */
++         ast_log(LOG_DEBUG, "Creating media id%d, payload %d, format %d\n", j,
++            media->formats[j]->payload,
++            media->formats[j]->format);
++
++         if (j++ >= media->num) break;
++      }
++   }
 +
 +	/* log */
 +	ast_log(LOG_DEBUG,"-creating media [%d,%s]\n",media->num,strndup(buffer,bufferLen));
@@ -1042,19 +1097,37 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +{
 +	int i = 0;
 +
++	ast_log(LOG_DEBUG, "Media: %p\n", media);
++	if (!media) return;
++
 +	/* Free format */
 +	for (i=0;i<media->num;i++)
 +	{
 +		/* Free control */
-+		if (media->formats[i]->control) 
++		if (media->formats && media->formats[i]->control)
++		{
 +			free(media->formats[i]->control);
++			media->formats[i]->control = NULL;
++		}
 +		/* Free format*/
-+		free(media->formats[i]);
++		if (media->formats && media->formats[i])
++		{
++		   free(media->formats[i]);
++		   media->formats[i] = NULL;
++		}
 +	}
 +	/* Free format */
-+	free(media->formats);
++	if (media->formats)
++	{
++	   free(media->formats);
++	   media->formats = NULL;
++	}
 +	/* Free media */
-+	free(media);
++	if (media)
++	{
++	   free(media);
++	   media = NULL;
++	}
 +}
 +static struct SDPContent* CreateSDP(char *buffer,int bufferLen)
 +{
@@ -1068,14 +1141,16 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	int f = 0;
 +
 +	/* Malloc */
-+	sdp = (struct SDPContent*) malloc(sizeof(struct SDPContent));
++	sdp = (struct SDPContent*) calloc(1, sizeof(struct SDPContent));
 +
 +	/* NO audio and video */
 +	sdp->audio = NULL;
 +	sdp->video = NULL;
 +
++	ast_log(LOG_DEBUG,"CreateSDP [%d]: ->%s<-\n", bufferLen, buffer);
++
 +	/* Read each line */
-+	while ( (j=strstr(i,"\n")) != NULL && (j<buffer+bufferLen))
++	while ( (j=strstr(i,"\n")) != NULL)
 +	{
 +		/* if it¡s not enougth data */
 +		if (j-i<=1)
@@ -1095,11 +1170,13 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +			/* media */
 +			if (strncmp(i+2,"video",5)==0)
 +			{
++            ast_log(LOG_DEBUG, "Parsing Video media\n");
 +				/* create video */
 +				sdp->video = CreateMedia(i,j-i);
 +				/* set current media */
 +				media = sdp->video;
 +			} else if (strncmp(i+2,"audio",5)==0) {
++            ast_log(LOG_DEBUG, "Parsing Audio media\n");
 +				/* create video */
 +				sdp->audio = CreateMedia(i,j-i);
 +				/* set current media */
@@ -1255,19 +1332,6 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	return atoi(buffer+i);
 +}
 +
-+static long GetHeaderValueLong(char *buffer,int bufferLen,char *header)
-+{
-+	int i;	 
-+
-+	/* Get start */
-+	if (!(i=HasHeader(buffer,bufferLen,header)))
-+		/* Exit */
-+		return 0;
-+
-+	/* Return value */
-+	return atol(buffer+i);
-+}
-+
 +static char* GetHeaderValue(char *buffer,int bufferLen,char *header)
 +{
 +	int i;	 
@@ -1342,7 +1406,6 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +
 +static int rtsp_play(struct ast_channel *chan,char *ip, int port, char *url,char *username,char *password,int isIPv6)
 +{
-+	struct ast_frame *f = NULL;
 +	struct ast_frame *sendFrame = NULL;
 +
 +	int infds[5];
@@ -1370,8 +1433,8 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	struct SDPContent* sdp = NULL;
 +	char *audioControl = NULL;
 +	char *videoControl = NULL;
-+	format_t audioFormat = 0;
-+	format_t videoFormat = 0;
++	int audioFormat = 0;
++	int videoFormat = 0;
 +	int audioType = 0;
 +	int videoType = 0;
 +	unsigned int lastVideo = 0;
@@ -1432,7 +1495,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	}
 +
 +	/* malloc frame & data */
-+	sendFrame = (struct ast_frame *) malloc(PKT_SIZE);
++	sendFrame = (struct ast_frame *) calloc(1, PKT_SIZE);
 +
 +	/* Set data pointer */
 +	rtpBuffer = (unsigned char*)sendFrame + PKT_OFFSET;
@@ -1468,50 +1531,16 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +			ms = 4000;
 +		}
 +
-+		/* Read from channels and fd*/
-+		if (ast_waitfor_nandfds(&chan,1,infds,5,NULL,&outfd,&ms))
-+		{
-+			/* Read frame */
-+			f = ast_read(chan);
-+
-+			/* If failed */
-+			if (!f) 
-+				/* exit */
-+				break;
-+			
-+			/* If it's a control channel */
-+			if (f->frametype == AST_FRAME_CONTROL) 
-+			{
-+				/* Check for hangup */
-+				if (f->subclass.integer == AST_CONTROL_HANGUP)
-+				{
-+					/* log */
-+					ast_log(LOG_DEBUG,"-Hangup\n");
-+					/* exit */
-+					player->end = 1;
-+				}
-+				
-+			 /* If it's a dtmf */
-+                        } else if (f->frametype == AST_FRAME_DTMF) {
-+				char dtmf[2];
-+				/* Get dtmf number */
-+				dtmf[0] = f->subclass.integer;
-+				dtmf[1] = 0;
-+
-+				/* Check for dtmf extension in context */
-+				if (ast_exists_extension(chan, chan->context, dtmf, 1, NULL)) {
-+					/* Set extension to jump */
-+					res = f->subclass.integer;
-+					/* Free frame */
-+					ast_frfree(f);
-+					/* exit */
-+					goto rstp_play_stop;
-+				}
-+			}
-+
-+			/* free frame */
-+			ast_frfree(f);
-+		} else if (outfd==player->fd) {
++      // Kick user from streaming server
++      if (ast_test_flag(&chan->inoflags, EXEC_APP_EXIT))
++      {
++         ast_clear_flag(&chan->inoflags, EXEC_APP_EXIT);
++         player->end = 1;
++         break;
++      }
++		/* Read from channels and fd */
++		//ast_waitfor_nandfds(NULL,0,infds,5,NULL,&outfd,&ms);
++		if ((outfd = ast_waitfor_n_fd(infds, 5, &ms, NULL)) == player->fd) {
 +			/* Depending on state */	
 +			switch (player->state)
 +			{
@@ -1580,8 +1609,9 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +						}
 +						/* Get new length */
 +						bufferLen -= responseLen;
-+						/* Move data to begining */
++						/* Move data to beginning */
 +						memcpy(buffer,buffer+responseLen,bufferLen);
++						buffer[bufferLen] = '\0';
 +					}
 +					
 +					/* If there is not enough data */	
@@ -1609,30 +1639,26 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +						break;
 +					}
 +
-+					ast_log(LOG_DEBUG,"-Finding compatible codecs [0x%lx]\n", chan->nativeformats);
++					ast_log(LOG_DEBUG,"-Finding compatible codecs [%x]\n", chan->nativeformats);
 +
 +					/* Get best audio track */
 +					if (sdp->audio)
 +					{
-+						/* Avoid ovverwriten */
-+						format_t cap  = chan->nativeformats | AST_FORMAT_AMRNB;
++						/* Avoid overwritten */
++						int best = chan->nativeformats;
 +
-+						/* Get best codec format for audio */
-+						format_t best = ast_translator_best_choice(&cap, &sdp->audio->all);
++	               ast_log(LOG_DEBUG,"-RTSP audio codec [%x]\n", sdp->audio->all);
 +
-+						ast_log(LOG_DEBUG,"-Search best codec for audio [cap:0x%lx,all:0x%lx,best:0x%lx]\n", cap, sdp->audio->all, best);
++	               /* Get best codec format for audio */
++						ast_translator_best_choice(&best, &sdp->audio->all);
 +
-+						/* Check if we have it */
-+						if (!(best & sdp->audio->all))
-+								/* Get generic best one */
-+								best = ast_best_codec(sdp->audio->all);
-+						ast_log(LOG_DEBUG,"-Search best codec for audio [cap:0x%lx,all:0x%lx,best:0x%lx]\n", cap, sdp->audio->all, best);
++						ast_log(LOG_DEBUG,"-Best codec for audio [%x]\n", best);
 +
 +						/* Get first matching format */
 +						for (i=0;i<sdp->audio->num;i++)
 +						{
 +							/* log */
-+							ast_log(LOG_DEBUG,"-audio [0x%lx,%d,%s]\n", sdp->audio->formats[i]->format, sdp->audio->formats[i]->payload ,sdp->audio->formats[i]->control);
++							ast_log(LOG_DEBUG,"-audio [%x,%d,%s]\n", sdp->audio->formats[i]->format, sdp->audio->formats[i]->payload ,sdp->audio->formats[i]->control);
 +							/* if we have that */
 +							if (sdp->audio->formats[i]->format == best)
 +							{
@@ -1656,7 +1682,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +						for (i=0;i<sdp->video->num;i++)
 +						{
 +							/* log */
-+							ast_log(LOG_DEBUG,"-video [0x%lx,%d,%s]\n", sdp->video->formats[i]->format, sdp->video->formats[i]->payload ,sdp->video->formats[i]->control);
++							ast_log(LOG_DEBUG,"-video [%x,%d,%s]\n", sdp->video->formats[i]->format, sdp->video->formats[i]->payload ,sdp->video->formats[i]->control);
 +							/* if we have that */
 +							if (sdp->video->formats[i]->format & chan->nativeformats)
 +							{
@@ -1667,14 +1693,14 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +								/* Store control */
 +								videoControl = sdp->video->formats[i]->control;
 +								/* Found best codec */
-+								ast_log(LOG_DEBUG,"-Found best video codec\n");
++								ast_log(LOG_DEBUG,"Found best video codec\n");
 +								/* Got a valid one */
 +								break;
 +							}
 +						}
 +
 +					/* Log formats */
-+					ast_log(LOG_DEBUG,"-Set write format [0x%lx,0x%lx,0x%lx]\n", audioFormat | videoFormat, audioFormat, videoFormat);
++					ast_log(LOG_DEBUG,"-Set write format [%x,%x,%x]\n", audioFormat | videoFormat, audioFormat, videoFormat);
 +
 +					/* Set write format */
 +					ast_set_write_format(chan, audioFormat | videoFormat);	
@@ -2043,7 +2069,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +		}
 +	}
 +
-+rstp_play_stop:
++//rstp_play_stop:
 +
 +	/* log */
 +	ast_log(LOG_DEBUG,"-rtsp_play end loop [%d]\n",res);
@@ -2081,7 +2107,6 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +static int rtsp_tunnel(struct ast_channel *chan,char *ip, int port, char *url)
 +{
 +	struct sockaddr_in sendAddr;
-+	struct ast_frame *f;
 +
 +	int infds[1];
 +	int outfd;
@@ -2139,25 +2164,8 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +		/* No output */
 +		outfd = -1;
 +		/* Read from channels and fd*/
-+		if (ast_waitfor_nandfds(&chan,1,infds,1,NULL,&outfd,&ms))
-+		{
-+			/* Read frame */
-+			f = ast_read(chan);
-+
-+			/* If failed */
-+			if (!f) 
-+				/* exit */
-+				break;
-+			
-+			/* If it's a control channel */
-+			if (f->frametype == AST_FRAME_CONTROL) 
-+				/* Check for hangup */
-+				if (f->subclass.integer == AST_CONTROL_HANGUP)
-+					/* exit */
-+					end = 1;
-+			/* free frame */
-+			ast_frfree(f);
-+		} else if (outfd==rtsp) {
++		ast_waitfor_nandfds(NULL,0,infds,1,NULL,&outfd,&ms);
++		if (outfd==rtsp) {
 +			/* Depending on state */	
 +			switch (state)
 +			{
@@ -2237,7 +2245,7 @@ diff -Naur asterisk-1.8.3.2_orig/apps/app_rtsp.c asterisk-1.8.3.2/apps/app_rtsp.
 +	return 0;
 +}
 +
-+static int app_rtsp(struct ast_channel *chan, void *data)
++static int app_rtsp(struct ast_channel *chan, const char *data)
 +{
 +	struct ast_module_user *u;
 +	char *uri;
