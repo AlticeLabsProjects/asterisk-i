@@ -18,64 +18,11 @@ Link to original patch: https://issues.asterisk.org/jira/browse/ASTERISK-19107
  $ tar -zxvf asterisk-1.8.3.2.tar.gz
  
  
- 3. Add the app WMS to asterisk
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-app-wms.patch
- 
- 
- 4. Add the codec AMR
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-codec-amr.patch
- 
- 
- 5. Add the SMRA support
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-smra-support.patch
-
-
- 6. Add the feature reject mode
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-reject-mode.patch 
- 
- 
- 7. Add the multiple IP support
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-udp-rtp-address-support.patch 
-
-
- 8. Add the private extensions support
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-private-extension.patch 
-
- 
- 9. Add the dtmf flash support
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-dtmf-flash-support.patch 
-
- 
- 10. Add the extension tel support
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-tel-extension.patch 
-
-
- 11. Add minor changes
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-minor-changes.patch  
- 
- 
- 12. Add ISUP support
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-chan-sip-isup.patch  
- 
- 13. Add warning suppress fix
- 
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-warning-suppress-fix.patch  
- 
- 14. Add include if exists fix
+ 3. Add include if exists fix
  
  $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-include-if-exists.patch 
  
- 5. Build Asterisk
+ 4. Build Asterisk
  
  $ cd asterisk-1.8.3.2
  $ ./configure
