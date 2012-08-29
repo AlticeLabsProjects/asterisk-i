@@ -1,0 +1,23 @@
+Description:
+
+This patchs must be used because wms also uses alaw file extensions as pcm file extension.
+
+ 1. Get the source for Asterisk 1.8.3.2 from:
+ 
+ http://downloads.asterisk.org/pub/telephony/asterisk/old-releases/asterisk-1.8.3.2.tar.gz
+ 
+ 
+ 2. Untar the Asterisk 1.8.3.2
+ 
+ $ tar -zxvf asterisk-1.8.3.2.tar.gz
+ 
+ 
+ 3. Add pcm file extension patch
+ 
+ $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-pcm-file-extension.patch 
+ 
+ 4. Build Asterisk
+ 
+ $ cd asterisk-1.8.3.2
+ $ ./configure
+ $ make
