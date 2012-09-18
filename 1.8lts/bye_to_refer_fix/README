@@ -20,7 +20,7 @@ This patch fixes an issue in which BYE is not sent after a REFER for unattended 
  
  4. Add the BYE to REFER fix patch
  
- $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-bye-to-refer.patch
+ $ patch -p1 -d asterisk-1.8.3.2/ < asterisk-i-bye-refer-fix.patch
 
  5. Build Asterisk
  
