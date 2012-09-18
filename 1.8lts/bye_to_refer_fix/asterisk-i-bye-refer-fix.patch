@@ -1,0 +1,12 @@
+diff -Naur asterisk-base-1.8.3.2/apps/app_wms.c asterisk-1.8.3.2/apps/app_wms.c
+--- asterisk-base-1.8.3.2/apps/app_wms.c	2012-09-18 14:33:12.061039643 +0100
++++ asterisk-1.8.3.2/apps/app_wms.c	2012-09-18 14:36:03.334025000 +0100
+@@ -738,7 +738,7 @@
+             }
+ 				else if (f->frametype == AST_FRAME_DTMF && who == chan) process_digit(chan, chan_vars, f->subclass.integer);
+ 				else if (f->frametype == AST_FRAME_CONTROL && who == chan && (f->subclass.integer == AST_CONTROL_HANGUP ||
+-                         f->subclass.integer == AST_CONTROL_BUSY || f->subclass.integer == AST_CONTROL_CONGESTION))
++                         f->subclass.integer == AST_CONTROL_BUSY || f->subclass.integer == AST_CONTROL_CONGESTION || f->subclass.integer == AST_CONTROL_TRANSFER))
+ 				{
+                if (option_verbose >= 3)
+                   ast_verbose(VERBOSE_PREFIX_3 "Got control hangup on channel %s\n", chan->name);
