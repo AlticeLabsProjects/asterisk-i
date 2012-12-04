@@ -44,7 +44,7 @@ diff -Naur asterisk-base-1.8.3.2/apps/wms_inoapi.c asterisk-1.8.3.2/apps/wms_ino
  
 -         trs_cmd.al_char_val1[0] = '\0';
 +		 if (hasDTMF == 1)
-+			trs_cmd.al_char_val1[0] = 'F\0';
++			trs_cmd.al_char_val1[1] = '\0';
 +		 else
 +			trs_cmd.al_char_val1[0] = '\0';
  
