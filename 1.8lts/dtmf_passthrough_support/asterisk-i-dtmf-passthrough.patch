@@ -1,0 +1,52 @@
+diff -Naur asterisk-base-1.8.3.2/apps/wms_inoapi.c asterisk-1.8.3.2/apps/wms_inoapi.c
+--- asterisk-base-1.8.3.2/apps/wms_inoapi.c	2012-12-04 10:01:13.057697300 +0000
++++ asterisk-1.8.3.2/apps/wms_inoapi.c	2012-12-04 10:08:54.829553000 +0000
+@@ -450,6 +450,7 @@
+ 	char *aux, *end;
+ 	char buff[1024];
+ 	int i;
++	int hasDTMF;
+ 	//pthread_t confThread;
+    //pthread_attr_t attr;
+    //int ret;
+@@ -467,6 +468,8 @@
+    trs_reply.error = FALSE;
+    trs_reply.body.g_ret_value = trs_cmd.al_int_val1;
+ 
++   hasDTMF = 0;
++   
+    //- ADD TO CONFERENCE -----------------------------------------
+    if (trs_cmd.al_int_val1 == 1) //conf_add
+    {
+@@ -501,7 +504,18 @@
+                   //Conference Record File
+                   if(trs_cmd.al_char_val1[0] == ' ')
+                      break;
+-                  strncpy(chan->conf_record, trs_cmd.al_char_val1, sizeof(chan->conf_record));
++					 
++				  // DTMF-Passthrough
++				  if(trs_cmd.al_char_val1[0] == 'F')
++				  {
++				    hasDTMF = 1;
++					strncpy(chan->conf_record, trs_cmd.al_char_val1 + 1, sizeof(chan->conf_record));
++				  }
++				  else
++				  {
++					strncpy(chan->conf_record, trs_cmd.al_char_val1, sizeof(chan->conf_record));
++				  }
++				  
+                   if((end = strchr(chan->conf_record, '\e')) != NULL)
+                      *end = '\0';
+ 
+@@ -554,7 +568,10 @@
+                break;
+          }
+ 
+-         trs_cmd.al_char_val1[0] = '\0';
++		 if (hasDTMF == 1)
++			trs_cmd.al_char_val1[1] = '\0';
++		 else
++			trs_cmd.al_char_val1[0] = '\0';
+ 
+          snprintf(chan_vars->conference.args, sizeof(chan_vars->conference.args), trs_cmd.al_char_val1);
+ /*
