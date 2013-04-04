@@ -1,0 +1,22 @@
+diff -Naur asterisk-base-1.8.3.2/apps/wms_inoapi.c asterisk-1.8.3.2/apps/wms_inoapi.c
+--- asterisk-base-1.8.3.2/apps/wms_inoapi.c	2013-04-04 10:54:42.196687785 +0000
++++ asterisk-1.8.3.2/apps/wms_inoapi.c	2013-04-04 12:09:32.036687611 +0000
+@@ -1018,10 +1018,15 @@
+                memset(chan_vars->digit_buffer, 0, sizeof(chan_vars->digit_buffer));
+ 			   strncpy(chan_vars->action.FILE_URL, trs_cmd.prompt_id, sizeof(chan_vars->action.FILE_URL));
+             build_terminator(chan, chan_vars, trs_cmd);
+-			   return;
+-		   }
++            return;
++         }
++         else
++         {
++            post_error(trs_cmd, chan_vars, ret_evt, INVALID_VOICE_FILE_PARAMETER);
++            return;
++         }
+       }
+-	}
++   }
+ }
+ 
+ /******************************************************************************
