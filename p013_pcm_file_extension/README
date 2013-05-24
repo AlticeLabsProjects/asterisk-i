@@ -1,0 +1,23 @@
+Description:
+
+This patchs must be used because wms also uses alaw file extensions as pcm file extension.
+
+ 1. Get the source for Asterisk 11.3.0 from:
+ 
+ http://downloads.asterisk.org/pub/telephony/asterisk/old-releases/asterisk-11.3.0.tar.gz
+ 
+ 
+ 2. Untar the Asterisk 11.3.0
+ 
+ $ tar -zxvf asterisk-11.3.0.tar.gz
+ 
+ 
+ 3. Add pcm file extension patch
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p013-pcm-file-extension.patch 
+ 
+ 4. Build Asterisk
+ 
+ $ cd asterisk-11.3.0
+ $ ./configure
+ $ make

@@ -1,0 +1,151 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p003/channels/chan_local.c asterisk-11.3.0/channels/chan_local.c
+--- asterisk-11.3.0.p003/channels/chan_local.c	2013-05-15 14:25:55.984688111 +0100
++++ asterisk-11.3.0/channels/chan_local.c	2013-05-15 16:09:26.996453282 +0100
+@@ -476,6 +476,9 @@
+ 	} else {
+ 		ast_log(LOG_WARNING, "Huh?  Local is being asked to answer?\n");
+ 	}
++
++	ast_channel_client_smra_attrib_set(p->owner, ast_channel_server_smra_attrib(p->chan));
++
+ 	ao2_unlock(p);
+ 	ao2_ref(p, -1);
+ 	return res;
+@@ -888,6 +891,7 @@
+ 	char *slash;
+ 	const char *exten;
+ 	const char *context;
++	SDPMedia temp_codec;
+ 
+ 	if (!p) {
+ 		return -1;
+@@ -925,6 +929,25 @@
+ 	ast_connected_line_copy_to_caller(ast_channel_caller(chan), ast_channel_connected(owner));
+ 	ast_connected_line_copy_from_caller(ast_channel_connected(chan), ast_channel_caller(owner));
+ 
++	// Enable Local interface
++	// For this, we need to enable inovox to receive an empty codec call or send client sdp as our capabilities
++	ast_channel_cid_ani_set(chan, ast_channel_cid_ani(owner));
++	ast_channel_cid_asserted_id_set(chan, ast_channel_cid_ani(owner));
++	ast_channel_cid_dnis_set(chan, dest);
++	pbx_builtin_setvar_helper(chan, "SIPURI", dest);
++
++	if (ast_opt_use_smra)
++	{
++	   temp_codec.media[AST_AUDIO_SDP].codec[0].payload = 8;
++	   temp_codec.media[AST_AUDIO_SDP].codec[0].type = AST_FORMAT_ALAW;
++	   temp_codec.media[AST_AUDIO_SDP].num++;
++	   temp_codec.media[AST_VIDEO_SDP].codec[0].payload = 103;
++	   temp_codec.media[AST_VIDEO_SDP].codec[0].type = AST_FORMAT_H263_PLUS;
++	   temp_codec.media[AST_VIDEO_SDP].num++;
++	   ast_channel_client_sdp_set(owner, &temp_codec);
++	   ast_channel_client_smra_attrib_set(chan, ast_channel_client_smra_attrib(owner));
++	}
++
+ 	ast_channel_language_set(chan, ast_channel_language(owner));
+ 	ast_channel_accountcode_set(chan, ast_channel_accountcode(owner));
+ 	ast_channel_musicclass_set(chan, ast_channel_musicclass(owner));
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p003/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-11.3.0.p003/channels/chan_sip.c	2013-05-15 14:25:51.817187854 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-05-15 16:09:32.013187568 +0100
+@@ -7991,6 +7991,14 @@
+ 
+ 	ast_channel_tech_pvt_set(tmp, dialog_ref(i, "sip_new: set chan->tech_pvt to i"));
+ 
++	if (ast_opt_use_smra) // DSP Media
++	{
++	   // SMRA Stuff
++	   ast_channel_client_smra_attrib_set(tmp, &(i->client_smra_attrib));
++	   ast_channel_client_sdp_set(tmp, &(i->client_sdp_codecs));
++	   ast_channel_server_sdp_set(tmp, &(i->client_sdp_codecs));
++	}
++
+ 	ast_channel_callgroup_set(tmp, i->callgroup);
+ 	ast_channel_pickupgroup_set(tmp, i->pickupgroup);
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p003/channels/sip/include/sip.h asterisk-11.3.0/channels/sip/include/sip.h
+--- asterisk-11.3.0.p003/channels/sip/include/sip.h	2013-05-15 14:25:51.900437796 +0100
++++ asterisk-11.3.0/channels/sip/include/sip.h	2013-05-15 16:09:42.216687824 +0100
+@@ -189,8 +189,8 @@
+ #define DEFAULT_RECORD_FEATURE   "automon"  /*!< The default feature specified for use with INFO */
+ #define DEFAULT_MOHINTERPRET   "default"  /*!< The default music class */
+ #define DEFAULT_MOHSUGGEST     ""
+-#define DEFAULT_VMEXTEN        "asterisk" /*!< Default voicemail extension */
+-#define DEFAULT_CALLERID       "asterisk" /*!< Default caller ID */
++#define DEFAULT_VMEXTEN        "wms" /*!< Default voicemail extension */
++#define DEFAULT_CALLERID       "wms" /*!< Default caller ID */
+ #define DEFAULT_MWI_FROM       ""
+ #define DEFAULT_NOTIFYMIME     "application/simple-message-summary"
+ #define DEFAULT_ALLOWGUEST     TRUE
+@@ -207,7 +207,7 @@
+ #define DEFAULT_COS_VIDEO      6      /*!< Level 2 class of service for video media */
+ #define DEFAULT_COS_TEXT       5      /*!< Level 2 class of service for text media (T.140) */
+ #define DEFAULT_ALLOW_EXT_DOM  TRUE    /*!< Allow external domains */
+-#define DEFAULT_REALM          "asterisk" /*!< Realm for HTTP digest authentication */
++#define DEFAULT_REALM          "wms" /*!< Realm for HTTP digest authentication */
+ #define DEFAULT_DOMAINSASREALM FALSE    /*!< Use the domain option to guess the realm for registration and invite requests */
+ #define DEFAULT_NOTIFYRINGING  TRUE     /*!< Notify devicestate system on ringing state */
+ #define DEFAULT_NOTIFYCID      DISABLED	/*!< Include CID with ringing notifications */
+@@ -228,14 +228,15 @@
+ #define DEFAULT_T1MIN             100   /*!< 100 MS for minimal roundtrip time */
+ #define DEFAULT_MAX_CALL_BITRATE (384)  /*!< Max bitrate for video */
+ #ifndef DEFAULT_USERAGENT
+-#define DEFAULT_USERAGENT  "Asterisk PBX"  /*!< Default Useragent: header unless re-defined in sip.conf */
+-#define DEFAULT_SDPSESSION "Asterisk PBX"  /*!< Default SDP session name, (s=) header unless re-defined in sip.conf */
++#define DEFAULT_USERAGENT  "wms"  /*!< Default Useragent: header unless re-defined in sip.conf */
++#define DEFAULT_SDPSESSION "wms"  /*!< Default SDP session name, (s=) header unless re-defined in sip.conf */
+ #define DEFAULT_SDPOWNER   "root"          /*!< Default SDP username field in (o=) header unless re-defined in sip.conf */
+ #define DEFAULT_ENGINE     "asterisk"      /*!< Default RTP engine to use for sessions */
+ #define DEFAULT_STORE_SIP_CAUSE FALSE      /*!< Don't store HASH(SIP_CAUSE,<channel name>) for channels by default */
+ #endif
+ #define DEFAULT_AMR_MODE      -1
+ #define DEFAULT_OCTET_ALIGN   TRUE
++#define DEFAULT_VIDEO_SIZE    1  /*! < 1 = CIF */
+ /*@}*/
+ 
+ /*! \name SIPflags
+@@ -1138,6 +1139,14 @@
+ 	struct ast_acl_list *directmediaacl; /*!< Which IPs are allowed to interchange direct media with this peer - copied from sip_peer */
+ 	struct ast_sockaddr recv;            /*!< Received as */
+ 	struct ast_sockaddr ourip;           /*!< Our IP (as seen from the outside) */
++
++	char url_params[AST_MAX_PARAMS];  /* sip_extended_params support */
++	char ic_extra_data[2048];
++
++	// SMRA
++	AST_SMRA_ATTRIB client_smra_attrib;
++	SDPMedia client_sdp_codecs;
++
+ 	enum transfermodes allowtransfer;   /*!< REFER: restriction scheme */
+ 	struct ast_channel *owner;          /*!< Who owns us (if we have an owner) */
+ 	struct sip_route *route;            /*!< Head of linked list of routing steps (fm Record-Route) */
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p003/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-11.3.0.p003/include/asterisk/channel.h	2013-05-15 14:26:01.508437838 +0100
++++ asterisk-11.3.0/include/asterisk/channel.h	2013-05-15 16:09:18.106764000 +0100
+@@ -3922,6 +3922,8 @@
+ void ast_channel_jointcapability_set(struct ast_channel *chan, struct ast_format_cap *value);
+ const SDPMedia *ast_channel_client_sdp(const struct ast_channel *chan);
+ void ast_channel_client_sdp_set(struct ast_channel *chan, SDPMedia *value);
++const SDPMedia *ast_channel_server_sdp(const struct ast_channel *chan);
++void ast_channel_server_sdp_set(struct ast_channel *chan, SDPMedia *value);
+ int ast_channel_defhangcause(const struct ast_channel *chan);
+ void ast_channel_defhangcause_set(struct ast_channel *chan, int value);
+ struct ast_flags *ast_channel_inoflags(const struct ast_channel *chan);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p003/main/channel_internal_api.c asterisk-11.3.0/main/channel_internal_api.c
+--- asterisk-11.3.0.p003/main/channel_internal_api.c	2013-05-15 14:26:52.884437842 +0100
++++ asterisk-11.3.0/main/channel_internal_api.c	2013-05-15 15:43:37.506124000 +0100
+@@ -827,6 +827,14 @@
+ {
+    memcpy(&chan->client_sdp_codecs, value, sizeof(chan->client_sdp_codecs));
+ }
++const SDPMedia *ast_channel_server_sdp(const struct ast_channel *chan)
++{
++   return &(chan->server_sdp_codecs);
++}
++void ast_channel_server_sdp_set(struct ast_channel *chan, SDPMedia *value)
++{
++   memcpy(&chan->server_sdp_codecs, value, sizeof(chan->server_sdp_codecs));
++}
+ int ast_channel_defhangcause(const struct ast_channel *chan)
+ {
+    return chan->defhangcause;

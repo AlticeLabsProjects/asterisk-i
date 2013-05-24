@@ -1,0 +1,252 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p004/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-11.3.0.p004/channels/chan_sip.c	2013-05-15 16:21:12.248437551 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-05-15 17:37:13.783247000 +0100
+@@ -804,8 +804,11 @@
+ static int global_dynamic_exclude_static = 0; /*!< Exclude static peers from contact registrations */
+ static unsigned char global_refer_addheaders; /*!< Add extra headers to outgoing REFER */
+ 
++static int global_defhangcause = AST_CAUSE_CALL_REJECTED;
++static int global_videosize = DEFAULT_VIDEO_SIZE; //CIF
+ static int global_amr_mode = DEFAULT_AMR_MODE;
+ static int global_amr_octetalign = DEFAULT_OCTET_ALIGN;
++static char global_reject_mode[AST_MAX_EXTENSION]; /*! strlen = 0 - ignore SIP OPTIONS, strlen > 0 - responde xx to SIP OPTIONS */
+ /*@}*/
+ 
+ /*!
+@@ -24526,54 +24529,61 @@
+ 		transmit_response_with_allow(p, "200 OK", req, 0);
+ 		return 0;
+ 	}
+-
+-	if (sip_cfg.auth_options_requests) {
+-		/* Do authentication if this OPTIONS request began the dialog */
+-		copy_request(&p->initreq, req);
+-		set_pvt_allowed_methods(p, req);
+-		res = check_user(p, req, SIP_OPTIONS, e, XMIT_UNRELIABLE, addr);
+-		if (res == AUTH_CHALLENGE_SENT) {
+-			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+-			return 0;
+-		}
+-		if (res < 0) { /* Something failed in authentication */
+-			ast_log(LOG_NOTICE, "Failed to authenticate device %s\n", sip_get_header(req, "From"));
+-			transmit_response(p, "403 Forbidden", req);
+-			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+-			return 0;
+-		}
++	if (ast_opt_reject_mode && global_reject_mode[0] == 0)
++	{
++	   res = 0;
++	   ast_log(LOG_NOTICE, "Ignoring SIP OPTIONS on REJECT mode!\n");
+ 	}
++	else
++	{
++	   if (sip_cfg.auth_options_requests) {
++	      /* Do authentication if this OPTIONS request began the dialog */
++	      copy_request(&p->initreq, req);
++	      set_pvt_allowed_methods(p, req);
++	      res = check_user(p, req, SIP_OPTIONS, e, XMIT_UNRELIABLE, addr);
++	      if (res == AUTH_CHALLENGE_SENT) {
++	         sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
++	         return 0;
++	      }
++	      if (res < 0) { /* Something failed in authentication */
++	         ast_log(LOG_NOTICE, "Failed to authenticate device %s\n", sip_get_header(req, "From"));
++	         transmit_response(p, "403 Forbidden", req);
++	         sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
++	         return 0;
++	      }
++	   }
+ 
+-	/* must go through authentication before getting here */
+-	gotdest = get_destination(p, req, NULL);
+-	build_contact(p);
+-
+-	if (ast_strlen_zero(p->context))
+-		ast_string_field_set(p, context, sip_cfg.default_context);
+-
+-	if (ast_shutting_down()) {
+-		msg = "503 Unavailable";
+-	} else {
+-		msg = "404 Not Found";
+-		switch (gotdest) {
+-		case SIP_GET_DEST_INVALID_URI:
+-			msg = "416 Unsupported URI scheme";
+-			break;
+-		case SIP_GET_DEST_EXTEN_MATCHMORE:
+-		case SIP_GET_DEST_REFUSED:
+-		case SIP_GET_DEST_EXTEN_NOT_FOUND:
+-			//msg = "404 Not Found";
+-			break;
+-		case SIP_GET_DEST_EXTEN_FOUND:
+-			msg = "200 OK";
+-			break;
+-		}
++	   /* must go through authentication before getting here */
++	   gotdest = get_destination(p, req, NULL);
++	   build_contact(p);
++
++	   if (ast_strlen_zero(p->context))
++	      ast_string_field_set(p, context, sip_cfg.default_context);
++
++	   if (ast_shutting_down()) {
++	      msg = "503 Unavailable";
++	   } else {
++	      msg = "404 Not Found";
++	      switch (gotdest) {
++	         case SIP_GET_DEST_INVALID_URI:
++	            msg = "416 Unsupported URI scheme";
++	            break;
++	         case SIP_GET_DEST_EXTEN_MATCHMORE:
++	         case SIP_GET_DEST_REFUSED:
++	         case SIP_GET_DEST_EXTEN_NOT_FOUND:
++	            //msg = "404 Not Found";
++	            break;
++	         case SIP_GET_DEST_EXTEN_FOUND:
++	            msg = "200 OK";
++	            break;
++	      }
++	   }
++	   transmit_response_with_allow(p, msg, req, 0);
+ 	}
+-	transmit_response_with_allow(p, msg, req, 0);
+ 
+ 	/* Destroy if this OPTIONS was the opening request, but not if
+ 	   it's in the middle of a normal call flow. */
+-	sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
++	sip_scheddestroy(p, 2000);
+ 
+ 	return 0;
+ }
+@@ -27908,6 +27918,16 @@
+ 	/* Get the command XXX */
+ 
+ 	cmd = REQ_OFFSET_TO_STR(req, rlpart1);
++
++	/* sip_extended_params support */
++	// process any url_params in the URL (e.g."voicexml=<url>")
++	if (!strcasecmp(cmd, "INVITE"))
++	{
++	   if ((e = strchr(REQ_OFFSET_TO_STR(req, rlpart2), ';')))
++	      strncpy(p->url_params, e + 1, sizeof(p->url_params));
++	   else p->url_params[0] = '\0';
++	}
++
+ 	e = ast_skip_blanks(REQ_OFFSET_TO_STR(req, rlpart2));
+ 
+ 	/* Save useragent of the client */
+@@ -31244,6 +31264,9 @@
+ 	global_qualify_gap = DEFAULT_QUALIFY_GAP;
+ 	global_qualify_peers = DEFAULT_QUALIFY_PEERS;
+ 
++	ast_copy_string(global_reject_mode, DEFAULT_REJECT_MODE, sizeof(global_reject_mode));
++	global_defhangcause = AST_CAUSE_CALL_REJECTED;
++	global_videosize = DEFAULT_VIDEO_SIZE; //CIF
+ 	global_amr_mode = DEFAULT_AMR_MODE;
+ 	global_amr_octetalign = DEFAULT_OCTET_ALIGN;
+ 
+@@ -31820,7 +31843,31 @@
+ 			} else {
+ 				ast_log(LOG_WARNING, "shrinkcallerid value %s is not valid at line %d.\n", v->value, v->lineno);
+ 			}
+-		} else if (!strcasecmp(v->name, "use_q850_reason")) {
++		} 	else if (!strcasecmp(v->name, "defaulthangupcause")) { // Default Hangup Cause
++		   if ((sscanf(v->value, "%d", &global_defhangcause) != 1) || (global_defhangcause < 0)) {
++		      ast_log(LOG_WARNING, "'%s' is not a valid Default Hangup Cause at line %d.  Using default.\n", v->value, v->lineno);
++		      global_defhangcause = AST_CAUSE_CALL_REJECTED;
++		   }
++		} else if (!strcasecmp(v->name, "rejectmode")) { // SIP OPTIONS behaviour
++		   ast_copy_string(global_reject_mode, v->value, sizeof(global_reject_mode));
++		} else if (!strcasecmp(v->name, "videosize")) {
++		   if ((sscanf(v->value, "%d", &global_videosize) != 1) || (global_videosize < 0)) {
++		      ast_log(LOG_WARNING, "'%s' is not a valid videosize at line %d.  Using default.\n", v->value, v->lineno);
++		      global_videosize = DEFAULT_VIDEO_SIZE; //CIF
++		   }
++		} else if (!strcasecmp(v->name, "amr_mode")) { // AMR-NB codec bitrate
++		   if ((sscanf(v->value, "%d", &global_amr_mode) != 1) || (global_amr_mode < 0) || (global_amr_mode > 7)) {
++		      ast_log(LOG_WARNING, "'%s' is not a valid AMR mode set %d.  Using default AMR122.\n", v->value, v->lineno);
++		      global_amr_mode = DEFAULT_AMR_MODE;
++		   }
++		} else if (!strcasecmp(v->name, "amr_octetalign")) { // AMR-NB octet alignment
++		   global_amr_octetalign = ast_true(v->value);
++		} else if (!strcasecmp(v->name, "send_ringing")) { // Send 180 Ringing by default
++		   ast_set2_flag(&ast_options2, ast_true(v->value), AST_OPT_FLAG2_SEND_RINGING);
++		} else if (!strcasecmp(v->name, "dsp_media")) { // Activate SMRA
++		   ast_set2_flag(&ast_options2, ast_true(v->value), AST_OPT_FLAG2_USE_SMRA);
++		}
++		else if (!strcasecmp(v->name, "use_q850_reason")) {
+ 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_Q850_REASON);
+ 		} else if (!strcasecmp(v->name, "maxforwards")) {
+ 			if (sscanf(v->value, "%30d", &sip_cfg.default_max_forwards) != 1
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p004/channels/sip/include/sip.h asterisk-11.3.0/channels/sip/include/sip.h
+--- asterisk-11.3.0.p004/channels/sip/include/sip.h	2013-05-15 16:21:12.312437822 +0100
++++ asterisk-11.3.0/channels/sip/include/sip.h	2013-05-15 17:19:48.694550000 +0100
+@@ -237,6 +237,7 @@
+ #define DEFAULT_AMR_MODE      -1
+ #define DEFAULT_OCTET_ALIGN   TRUE
+ #define DEFAULT_VIDEO_SIZE    1  /*! < 1 = CIF */
++#define DEFAULT_REJECT_MODE   "" /*! strlen = 0 - ignore SIP OPTIONS, strlen > 0 - responde xx to SIP OPTIONS */
+ /*@}*/
+ 
+ /*! \name SIPflags
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p004/main/manager.c asterisk-11.3.0/main/manager.c
+--- asterisk-11.3.0.p004/main/manager.c	2013-05-15 16:22:07.052443188 +0100
++++ asterisk-11.3.0/main/manager.c	2013-05-15 17:28:09.745090000 +0100
+@@ -888,6 +888,20 @@
+ 			<para>Generates an AOC-D or AOC-E message on a channel.</para>
+ 		</description>
+ 	</manager>
++	<manager name="RejectMode" language="en_US">
++		<synopsis>
++			Set Call Status to ACCEPT/REJECT.
++		</synopsis>
++		<syntax>
++			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
++			<parameter name="Status" required="true">
++				<para>Status: yes or no.</para>
++			</parameter>
++		</syntax>
++		<description>
++			<para>Set Call Status to ACCEPT/REJECT.</para>
++		</description>
++	</manager>
+ 	<function name="AMI_CLIENT" language="en_US">
+ 		<synopsis>
+ 			Checks attributes of manager accounts
+@@ -2646,6 +2660,29 @@
+ 	return 0;
+ }
+ 
++static int action_rejectmode(struct mansession *s, const struct message *m)
++{
++   const char *status = astman_get_header(m, "Status");
++
++   if (ast_true(status))
++   {
++      if (!ast_opt_reject_mode)
++         ast_log(LOG_NOTICE, "Setting call status to REJECT!\n");
++
++      ast_set2_flag(&ast_options2, 1, AST_OPT_FLAG2_REJECT_MODE);
++      astman_send_response(s, m, "RejectMode", "Rejecting calls");
++   }
++   else
++   {
++      if (ast_opt_reject_mode)
++         ast_log(LOG_NOTICE, "Setting call status to ACCEPT!\n");
++
++      ast_set2_flag(&ast_options2, 0, AST_OPT_FLAG2_REJECT_MODE);
++      astman_send_response(s, m, "RejectMode", "Accepting calls");
++   }
++   return 0;
++}
++
+ static int action_getconfig(struct mansession *s, const struct message *m)
+ {
+ 	struct ast_config *cfg;
+@@ -7487,6 +7524,7 @@
+ 		ast_manager_register_xml_core("ModuleLoad", EVENT_FLAG_SYSTEM, manager_moduleload);
+ 		ast_manager_register_xml_core("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck);
+ 		ast_manager_register_xml_core("AOCMessage", EVENT_FLAG_AOC, action_aocmessage);
++		ast_manager_register_xml_core("RejectMode", 0, action_rejectmode);
+ 		ast_manager_register_xml_core("Filter", EVENT_FLAG_SYSTEM, action_filter);
+ 
+ 		ast_cli_register_multiple(cli_manager, ARRAY_LEN(cli_manager));
