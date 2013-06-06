@@ -1,0 +1,1098 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-05-27 15:56:01.968688148 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-05-28 15:01:49.832437880 +0100
+@@ -1440,6 +1440,7 @@
+ static int transmit_cc_notify(struct ast_cc_agent *agent, struct sip_pvt *subscription, enum sip_cc_notify_state state);
+ static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
+ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno);
++static void add_required_respheader(struct sip_request *req);
+ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno);
+ static void copy_request(struct sip_request *dst, const struct sip_request *src);
+ static void receive_message(struct sip_pvt *p, struct sip_request *req, struct ast_sockaddr *addr, const char *e);
+@@ -4494,6 +4495,9 @@
+ 		if (sscanf(ast_str_buffer(pkt->data), "SIP/2.0 %30u", &respid) == 1) {
+ 			pkt->response_code = respid;
+ 		}
++		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && respid > 100 && respid < 200) {
++			pkt->rseqno = p->rseq;
++		}
+ 	}
+ 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
+ 	pkt->retransid = -1;
+@@ -4678,7 +4682,7 @@
+ 
+ /*! \brief Acknowledges receipt of a packet and stops retransmission
+  * called with p locked*/
+-int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
++int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, uint32_t rseqno)
+ {
+ 	struct sip_pkt *cur, *prev = NULL;
+ 	const char *msg = "Not Found";	/* used only for debugging */
+@@ -4697,6 +4701,10 @@
+ 		if (cur->seqno != seqno || cur->is_resp != resp) {
+ 			continue;
+ 		}
++		/* With PRACK we can have a situation with multiple unPRACKed responses */
++		if (rseqno && cur->rseqno != rseqno) {
++			continue;
++		}
+ 		if (cur->is_resp || cur->method == sipmethod) {
+ 			res = TRUE;
+ 			msg = "Found";
+@@ -4708,6 +4716,7 @@
+ 				if (sipdebug)
+ 					ast_debug(4, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
+ 			}
++
+ 			/* This odd section is designed to thwart a
+ 			 * race condition in the packet scheduler. There are
+ 			 * two conditions under which deleting the packet from the
+@@ -4738,8 +4747,8 @@
+ 			break;
+ 		}
+ 	}
+-	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s\n",
+-		p->callid, resp ? "Response" : "Request", seqno, msg);
++	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s Rseq %u\n",
++		p->callid, resp ? "Response" : "Request", seqno, msg, rseqno);
+ 	return res;
+ }
+ 
+@@ -4757,7 +4766,7 @@
+ 		}
+ 		cur = p->packets;
+ 		method = (cur->method) ? cur->method : find_sip_method(ast_str_buffer(cur->data));
+-		__sip_ack(p, cur->seqno, cur->is_resp, method);
++		__sip_ack(p, cur->seqno, cur->is_resp, method, cur->rseqno);
+ 	}
+ }
+ 
+@@ -4872,6 +4881,10 @@
+ 		with_sdp ? send_provisional_keepalive_with_sdp : send_provisional_keepalive, dialog_ref(pvt, "Increment refcount to pass dialog pointer to sched callback"));
+ }
+ 
++/*! \brief Adds a Required header 
++
++	Needs to be called before attachment (i.e. SDP) is added
++*/
+ static void add_required_respheader(struct sip_request *req)
+ {
+ 	struct ast_str *str;
+@@ -4900,11 +4913,35 @@
+ 	ast_free(str);
+ }
+ 
++/*! \brief Active PRACK if supported by config and by other end */
++static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int reliable)
++{
++	/* If method is INVITE and it contains Supported: 100 rel and we have enabled PRACK */
++	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL)) {
++		/* Check if the invite has 100 REL supported here */
++		if (reliable == XMIT_PRACK) {
++			char buf[SIPBUFSIZE/2];
++			if (p->rseq == 0) {
++				p->rseq = 41; /* Starting level. Hi Douglas */
++			}
++			snprintf(buf, sizeof(buf), "%d", ++(p->rseq));
++			add_header(req, "Rseq", buf);
++			req->rseqno = p->rseq;
++			req->reqsipoptions |= SIP_OPT_100REL;
++			append_history(p, "PRACK", "PRACK Required: Our Rseq %u", p->rseq);
++			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %u \n", p->rseq);
++		} else {
++			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
++		}
++	}
++}
++
+ /*! \brief Transmit response on SIP request*/
+ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno)
+ {
+ 	int res;
+ 
++
+ 	finalize_content(req);
+ 	add_blank(req);
+ 	if (sip_debug_test_pvt(p)) {
+@@ -4929,7 +4966,7 @@
+ 	}
+ 
+ 	res = (reliable) ?
+-		 __sip_reliable_xmit(p, seqno, 1, req->data, (reliable == XMIT_CRITICAL), req->method) :
++		 __sip_reliable_xmit(p, seqno, 1, req->data, (reliable == XMIT_CRITICAL || reliable == XMIT_PRACK), req->method) :
+ 		__sip_xmit(p, req->data);
+ 	deinit_req(req);
+ 	if (res > 0) {
+@@ -7565,9 +7602,14 @@
+ 	struct sip_pvt *p = ast_channel_tech_pvt(ast);
+ 
+ 	sip_pvt_lock(p);
+-	if (ast_channel_state(ast) != AST_STATE_UP) {
++	if ((ast_channel_state(ast) != AST_STATE_UP) && ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
++ 		ast_set_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
++ 		ast_debug(2, "<-<-<-<-<-<-< HOLDING Answer while waiting for PRACK to arrive on channel %s\n", ast_channel_name(ast));
++ 		sip_pvt_unlock(p);
++ 		return 0;
++ 	}
++	if ((ast_channel_state(ast) != AST_STATE_UP) || ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
+ 		try_suggested_sip_codec(p);
+-
+ 		ast_setstate(ast, AST_STATE_UP);
+ 		ast_debug(1, "SIP answering channel: %s\n", ast_channel_name(ast));
+ 		ast_rtp_instance_update_source(p->rtp);
+@@ -11706,13 +11748,15 @@
+  *  is supported for this dialog. */
+ static int add_supported(struct sip_pvt *pvt, struct sip_request *req)
+ {
+-	int res;
++	char supported[256] = "replaces";
++
+ 	if (st_get_mode(pvt, 0) != SESSION_TIMER_MODE_REFUSE) {
+-		res = add_header(req, "Supported", "replaces, timer");
+-	} else {
+-		res = add_header(req, "Supported", "replaces");
++		strncat(supported, ", timer", sizeof(supported));
++	} 
++	if (ast_test_flag(&pvt->flags[2], SIP_PAGE3_PRACK)) {
++		strncat(supported, ", 100rel", sizeof(supported));
+ 	}
+-	return res;
++	return add_header(req, "Supported", supported);
+ }
+ 
+ /*! \brief Add header to SIP message */
+@@ -12567,7 +12611,9 @@
+ 	struct sip_request resp;
+ 	uint32_t seqno = 0;
+ 
+-	if (reliable && (sscanf(sip_get_header(req, "CSeq"), "%30u ", &seqno) != 1)) {
++	int res = sscanf(sip_get_header(req, "CSeq"), "%30u ", &seqno);
++
++	if (reliable && res != 1) {
+ 		ast_log(LOG_WARNING, "Unable to determine sequence number from '%s'\n", sip_get_header(req, "CSeq"));
+ 		return -1;
+ 	}
+@@ -12579,6 +12625,10 @@
+ 		ast_clear_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
+ 		add_rpid(&resp, p);
+ 	}
++	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
++		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
++		reliable = XMIT_PRACK;
++	}
+ 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
+ 		add_cc_call_info_to_response(p, &resp);
+ 	}
+@@ -12620,6 +12670,10 @@
+ 		}
+  */
+ 	}
++	if (strncmp(msg, "100", 3)) {
++		add_prack_respheader(p, &resp, reliable);
++		add_required_respheader(&resp);
++	}
+ 	return send_response(p, &resp, reliable, seqno);
+ }
+ 
+@@ -12632,6 +12686,7 @@
+ 	}
+ 	respprep(&resp, p, msg, req);
+ 	add_header(&resp, "SIP-ETag", esc_entry->entity_tag);
++	add_required_respheader(&resp);
+ 
+ 	return send_response(p, &resp, 0, 0);
+ }
+@@ -12721,6 +12776,7 @@
+ 	respprep(&resp, p, msg, req);
+ 	add_date(&resp);
+ 	add_header(&resp, "Unsupported", unsupported);
++	add_required_respheader(&resp);
+ 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
+ }
+ 
+@@ -12792,6 +12848,7 @@
+ 	struct sip_request resp;
+ 	respprep(&resp, p, msg, req);
+ 	add_header(&resp, "Accept", "application/sdp");
++	add_required_respheader(&resp);
+ 	return send_response(p, &resp, reliable, 0);
+ }
+ 
+@@ -12804,6 +12861,7 @@
+ 	snprintf(tmp, sizeof(tmp), "%d", minexpires);
+ 	respprep(&resp, p, msg, req);
+ 	add_header(&resp, "Min-Expires", tmp);
++	add_required_respheader(&resp);
+ 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
+ }
+ 
+@@ -14374,6 +14432,18 @@
+ 	if (rpid == TRUE) {
+ 		add_rpid(&resp, p);
+ 	}
++	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
++		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
++		reliable = XMIT_PRACK;
++	}
++	if (strncmp(msg, "100", 3)) {
++		/* If we send a response WITH sdp we are not allowed to respond before the PRACK is received */
++		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL)) {
++			ast_set_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);
++		}
++		add_prack_respheader(p, &resp, reliable);
++		add_required_respheader(&resp);
++	}
+ 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
+ 		add_cc_call_info_to_response(p, &resp);
+ 	}
+@@ -15017,7 +15087,69 @@
+ }
+ 
+ /*! 
+- * \brief Build REFER/INVITE/OPTIONS/SUBSCRIBE message and transmit it
++ * \brief transmit SIP PRACK as a response to a provisional response with a Rseq and Require: 100rel header 
++ */
++static int transmit_prack(struct sip_pvt *p, uint32_t their_rseq)
++{
++	int res;
++	int comparerseq = TRUE;
++	uint32_t focus_rseq = p->irseq;
++
++	/* During the early media phase, we could have a situation where we get provisional
++	   responses from multiple devices, in separate early dialogs. In this case, this 
++	   code focuses on the FIRST early media response as the one in focus where we 
++	   check the rseq sequence numbers for retransmits and act upon them.
++	*/
++
++	if (!ast_strlen_zero(p->theirtag_prack) && strcmp(p->theirtag, p->theirtag_prack)) {
++		/* We have already sent a PRACK in this dialog, but to a different device.
++		   In this code, we focus on the first response that requires PRACK and do not check
++		   the validity of rseq in responses in other early dialogs by controlling
++		   the PRACK sequence numbers ordering.
++
++		   To be 100% RFC correct, we should have a sip_pvt structure for each early dialog
++		   and terminate them if we get a 199 response in that early dialog. these should
++		   be organized in a tree-like structure based on the original
++		   INVITE callid, cseq and from-tag.
++		*/
++		comparerseq = FALSE;
++	}
++	
++	if (comparerseq) {
++		if (their_rseq == p->irseq) {
++			ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %u \n", their_rseq);
++			/* RFC 3262: In particular, a UAC SHOULD NOT retransmit the PRACK request
++   		   		when it receives a retransmission of the provisional response being
++   		   		acknowledged, although doing so does not create a protocol error.*/
++			return -2;	/* Not used by transmit_invite et al */
++		}
++		if (p->irseq > 0 && their_rseq != p->irseq + 1) {
++			ast_debug(3, "!?!?!?!?!? This is a response out of sequence! ignored. %u \n", their_rseq);
++			/* RFC 3262: if the UAC receives another reliable provisional
++   				response to the same request, and its RSeq value is not one higher
++   				than the value of the sequence number, that response MUST NOT be
++   				acknowledged with a PRACK, and MUST NOT be processed further by the
++   				UAC.  An implementation MAY discard the response, or MAY cache the
++   				response in the hopes of receiving the missing responses.
++			*/
++			return -3;
++		}
++	}
++	p->irseq = their_rseq;
++	res = transmit_invite(p, SIP_PRACK, 0, 1, NULL);
++
++	if (ast_strlen_zero(p->theirtag_prack)) {
++		p->irseq = their_rseq;
++		ast_string_field_set(p, theirtag_prack, p->tag);		/* Save this tag as a PRACK focus for this dialog */
++	} else {
++		p->irseq = focus_rseq;
++	}
++
++	return res;
++}
++
++/*! 
++ * \brief Build PRACK/REFER/INVITE/OPTIONS/SUBSCRIBE message and transmit it
+  * \param p sip_pvt structure
+  * \param sipmethod
+  * \param sdp unknown
+@@ -15032,7 +15164,9 @@
+ 
+ 	if (init) {/* Bump branch even on initial requests */
+ 		p->branch ^= ast_random();
+-		p->invite_branch = p->branch;
++		if (sipmethod != SIP_PRACK) {
++			p->invite_branch = p->branch;
++		}
+ 		build_via(p);
+ 	}
+ 	if (init > 1) {
+@@ -15062,12 +15196,18 @@
+ 			add_header(&req, "Accept", "application/call-completion");
+ 		}
+ 		add_expires(&req, p->expiry);
++ 	} else if (sipmethod == SIP_PRACK) {
++ 		/* Add headers for PRACK */
++ 		char buf[SIPBUFSIZE/2];
++ 		snprintf(buf, sizeof(buf), "%u %u %s", p->irseq, p->lastinvite, "INVITE");
++ 		add_header(&req, "RAck", buf);
+ 	}
+ 
+ 	/* This new INVITE is part of an attended transfer. Make sure that the
+ 	other end knows and replace the current call with this new call */
+ 	if (p->options && !ast_strlen_zero(p->options->replaces)) {
+ 		add_header(&req, "Replaces", p->options->replaces);
++		/* XXX This needs to be automated since we can have multiple options here */
+ 		add_header(&req, "Require", "replaces");
+ 	}
+ 
+@@ -21168,6 +21308,7 @@
+ 		ast_cli(fd, "  DirectMedia  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_DIRECT_MEDIA)));
+ 		ast_cli(fd, "  PromiscRedir : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)));
+ 		ast_cli(fd, "  User=Phone   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
++		ast_cli(fd, "  PRACK support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_PRACK)));
+ 		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
+ 		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
+ 		ast_cli(fd, "  Ign SDP ver  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
+@@ -21304,6 +21445,7 @@
+ 
+ 		/* - is enumerated */
+ 		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
++		astman_append(s, "SIP-PRACK: %s\r\n", ast_test_flag(&peer->flags[2], SIP_PAGE3_PRACK) ? "Y" : "N");
+ 		astman_append(s, "ToHost: %s\r\n", peer->tohost);
+ 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n", ast_sockaddr_stringify_addr(&peer->addr), ast_sockaddr_port(&peer->addr));
+ 		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_sockaddr_stringify_addr(&peer->defaddr), ast_sockaddr_port(&peer->defaddr));
+@@ -21906,7 +22048,9 @@
+ 	ast_cli(a->fd, "  Timer T1 minimum:       %d\n", global_t1min);
+  	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
+ 	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
++	ast_cli(a->fd, "  Early media focus:      %s\n", AST_CLI_YESNO(sip_cfg.early_media_focus));
+ 	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
++	ast_cli(a->fd, "  PRACK support:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_PRACK)));
+ 
+ 	ast_cli(a->fd, "\nDefault Settings:\n");
+ 	ast_cli(a->fd, "-----------------\n");
+@@ -22290,6 +22434,10 @@
+ 			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
+ 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
+ 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
++ 			ast_cli(a->fd, "  SIP PRACK support:      %s\n", ast_test_flag(&cur->flags[2], SIP_PAGE3_100REL) ? "Active" :
++ 				 (ast_test_flag(&cur->flags[2], SIP_PAGE3_PRACK) ? "Enabled" : "Disabled"));
++ 
++			ast_cli(a->fd, "  SIP PRACK active        %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_100REL)));
+ 			ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(cur->allowtransfer));
+ 			ast_cli(a->fd, "  Force rport:            %s\n", force_rport_string(cur->flags));
+ 			if (ast_sockaddr_isnull(&cur->redirip)) {
+@@ -23642,6 +23790,48 @@
+ 	return 0;
+ }
+ 
++/*! \brief Handle PRACK responses
++ */
++static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, uint32_t seqno)
++{
++	ast_debug(2, "---> Got response on PRACK :: %d \n", resp);
++	/* Handle authentication early */
++	if (resp == 401 || resp == 407) {
++		if (p->options) {
++			p->options->auth_type = (resp == 401 ? WWW_AUTH : PROXY_AUTH);
++		}
++		if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, resp, SIP_PRACK, 1)) {
++			ast_log(LOG_NOTICE, "Failed to authenticate on PRACK to '%s'\n", sip_get_header(&p->initreq, "From"));
++		}
++		return;
++	}
++
++	/* THe REALLY important thing is that the PRACK request gets a response. The response itself
++	   is not that important. A 481 means that the call will hang up. No response at all means
++	   that the call will hang up 
++	 */
++	switch(resp) {
++	case 200:	/* 200 OK - all is fine in the kingdom of SIP */
++		break;
++
++	case 408: /* Timeout */
++	case 481: /* Ok, they did not find our call ID. Let's die */
++		if (p->owner) {
++			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
++		}
++		break;
++	case 403: /* Forbidden */
++	case 415: /* Unsupported media type */
++	case 488: /* Not acceptable here */
++	case 606: /* Not Acceptable */
++	default:
++		/* Don't do anything */
++		break;
++	};
++	
++	
++}
++
+ /*!
+  * \brief Handle authentication challenge for SIP UPDATE
+  *
+@@ -23911,7 +24101,7 @@
+ 				ast_setstate(p->owner, AST_STATE_RINGING);
+ 			}
+ 		}
+-		if (find_sdp(req)) {
++		if (!req->ignoresdp && find_sdp(req)) {
+ 			if (p->invitestate != INV_CANCELLED) {
+ 				p->invitestate = INV_EARLY_MEDIA;
+ 			}
+@@ -23921,6 +24111,9 @@
+ 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
+ 			}
+ 			ast_rtp_instance_activate(p->rtp);
++			if (sip_cfg.early_media_focus && ast_strlen_zero(p->theirtag_early)) {
++				ast_string_field_set(p, theirtag_early, p->tag);
++			}
+ 		}
+ 		check_pendings(p);
+ 		break;
+@@ -23994,7 +24187,7 @@
+ 			}
+ 			sip_handle_cc(p, req, AST_CC_CCNR);
+ 		}
+-		if (find_sdp(req)) {
++		if (!req->ignoresdp && find_sdp(req)) {
+ 			if (p->invitestate != INV_CANCELLED) {
+ 				p->invitestate = INV_EARLY_MEDIA;
+ 			}
+@@ -24003,6 +24196,9 @@
+ 				/* Queue a progress frame */
+ 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
+ 			}
++			if (sip_cfg.early_media_focus && ast_strlen_zero(p->theirtag_early)) {
++				ast_string_field_set(p, theirtag_early, p->tag);
++			}
+ 			ast_rtp_instance_activate(p->rtp);
+ 		} else {
+ 			/* Alcatel PBXs are known to send 183s with no SDP after sending
+@@ -24888,6 +25084,8 @@
+ 	char *c_copy = ast_strdupa(c);
+ 	/* Skip the Cseq and its subsequent spaces */
+ 	const char *msg = ast_skip_blanks(ast_skip_nonblanks(c_copy));
++	const char *required = sip_get_header(req, "Require");
++	char tag[128];
+ 
+ 	if (!msg)
+ 		msg = "";
+@@ -24926,7 +25124,7 @@
+ 				ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
+ 			}
+ 		} else {
+-			ack_res = __sip_ack(p, seqno, 0, sipmethod);
++			ack_res = __sip_ack(p, seqno, 0, sipmethod, 0);
+ 		}
+ 
+ 		if (ack_res == FALSE) {
+@@ -24945,13 +25143,14 @@
+ 		p->pendinginvite = 0;
+ 	}
+ 
+-	/* Get their tag if we haven't already */
+-	if (ast_strlen_zero(p->theirtag) || (resp >= 200)) {
+-		char tag[128];
++	
++	/* Always get the tag. Find_call will filter out after we have an established dialog,
++	   so that we don't update the tag after a 200 or other final response. 
++	   Provided that SIP pedantic checking is turned on of course.
++	*/
++	gettag(req, "To", tag, sizeof(tag));
++	ast_string_field_set(p, theirtag, tag);
+ 
+-		gettag(req, "To", tag, sizeof(tag));
+-		ast_string_field_set(p, theirtag, tag);
+-	}
+ 	/* This needs to be configurable on a channel/peer level,
+ 	   not mandatory for all communication. Sadly enough, NAT implementations
+ 	   are not so stable so we can always rely on these headers.
+@@ -24971,6 +25170,50 @@
+ 		pvt_set_needdestroy(p, "received 4XX response to a BYE");
+ 		return;
+ 	}
++	
++	/* If we have a required header in the response, the other side have activated an extension
++	   we said that we do support */
++	if (!ast_strlen_zero(required)) {
++		int activeextensions = parse_required_sip_options(required);
++		if (activeextensions & SIP_OPT_100REL) {
++
++			const char *rseq = sip_get_header(req, "RSeq");
++			uint32_t their_rseq;
++			int res;
++			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
++
++			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
++			 */
++			sscanf(sip_get_header(req, "RSeq"), "%30u ", &their_rseq);
++			append_history(p, "TxPrack", "Their Rseq %u\n", their_rseq);
++			parse_ok_contact(p, req);
++			build_route(p, req, 1, resp);
++			
++			res = transmit_prack(p, their_rseq);
++			if (res == -2) {
++				/* This response is a retransmit and should be ignored */
++				/* RFC 3262: Once a reliable provisional response is received, retransmissions of
++   				   that response MUST be discarded.  A response is a retransmission when
++   				   its dialog ID, CSeq, and RSeq match the original response.  
++				*/
++				append_history(p, "PrIgnore", "Ignoring this retransmit (PRACK active)\n");
++				return;
++			} else if (res  == -3) {
++				append_history(p, "PrIgnore", "Ignoring this response - out of order (PRACK active)\n");
++				return;
++			}
++		}
++		if (activeextensions & SIP_OPT_TIMER) {
++			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
++			/* Do nothing, funny enough */
++		}
++	}
++
++	if (sip_cfg.early_media_focus && !ast_strlen_zero(p->theirtag_early) && strcmp(p->theirtag_early, p->theirtag)) {
++		/* If we already are in early media phase, and have a response from a new device in this call we should
++	   	ignore the SDP. */
++		req->ignoresdp = TRUE;
++	}
+ 
+ 	if (p->relatedpeer && sipmethod == SIP_OPTIONS) {
+ 		/* We don't really care what the response is, just that it replied back.
+@@ -24988,6 +25231,9 @@
+ 	} else if (sipmethod == SIP_INFO) {
+ 		/* More good gravy! */
+ 		handle_response_info(p, resp, rest, req, seqno);
++	} else if (sipmethod == SIP_PRACK) {
++		/* More good candy! */
++		handle_response_prack(p, resp, rest, req, seqno);
+ 	} else if (sipmethod == SIP_MESSAGE) {
+ 		/* More good gravy! */
+ 		handle_response_message(p, resp, rest, req, seqno);
+@@ -26157,6 +26403,37 @@
+ 	return 0;
+ }
+ 
++/*! Support for the SIP Prack method
++ */
++static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
++{
++	const char *rack = sip_get_header(req, "RAck");
++	uint32_t rseq, cseq;
++
++	if(sscanf(rack, "%30u %30u", &rseq, &cseq) != 2) {
++		/* we did not get proper rseq/cseq */
++		transmit_response(p, "481 Could not get proper rseq/cseq in Rack", req);
++	}
++	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %u and cseq %u \n", rseq, cseq);
++	if (rseq <= p->rseq) {
++		/* Ack the retransmits */
++		int acked = __sip_ack(p, cseq, 1 /* response */, 0, rseq);
++		ast_debug(2, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
++	}
++	append_history(p, "PRACK", "PRACK received Rseq %u", rseq);
++	transmit_response(p, "200 OK", req);
++	if (ast_test_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK)) {
++		/* If the response sent reliably contained an SDP, we're not allowed to  answer
++		   until we have a PRACK response 
++		 */
++		ast_debug(2, "-<-<--<-<-<-<- Finally a good time to answer call (PRACK arrived) %s \n", ast_channel_name(p->owner));
++		ast_clear_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
++		sip_answer(p->owner);
++	}
++	ast_clear_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);	/* Clear flag */
++	return 0;
++}
++
+ /*!
+  * \brief Handle incoming INVITE request
+  * \note If the INVITE has a Replaces header, it is part of an
+@@ -26227,6 +26504,23 @@
+ 	p->sipoptions |= required_profile;
+ 	p->reqsipoptions = required_profile;
+ 
++	/* Check if the request supports or require PRACK */
++	if (p->reqsipoptions & SIP_OPT_100REL || p->sipoptions & SIP_OPT_100REL) {
++		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {	/* Is PRACK enabled for this dialog? */
++			ast_set_flag(&p->flags[2], SIP_PAGE3_100REL);	/* Mark PRACK as active for this dialog */
++			ast_debug(2, "--#-#-#-#- Adding PRACK support for this dialog \n");
++		} else if (p->reqsipoptions & SIP_OPT_100REL) {
++			/* If PRACK was required but is disabled in configuration, don't play */
++			transmit_response(p, "420 Bad extension (unsupported)", req);
++			p->invitestate = INV_COMPLETED;
++			if (!p->lastinvite) {
++				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
++			}
++			res = 0;
++			goto request_invite_cleanup;
++		}
++	}
++
+ 	/* Check if this is a loop */
+ 	if (ast_test_flag(&p->flags[0], SIP_OUTGOING) && p->owner && (p->invitestate != INV_TERMINATED && p->invitestate != INV_CONFIRMED) && ast_channel_state(p->owner) != AST_STATE_UP) {
+ 		/* This is a call to ourself.  Send ourselves an error code and stop
+@@ -26289,7 +26583,7 @@
+ 			 * transaction. Calling __sip_ack will take care of this by clearing the p->pendinginvite and removing the response
+ 			 * from the previous transaction from the list of outstanding packets.
+ 			 */
+-			__sip_ack(p, p->pendinginvite, 1, 0);
++			__sip_ack(p, p->pendinginvite, 1, 0, 0);
+ 		} else {
+ 			/* We already have a pending invite. Sorry. You are on hold. */
+ 			p->glareinvite = seqno;
+@@ -28628,7 +28922,7 @@
+ 		return 0;
+ 	} else if (auth_result == AUTH_SUCCESSFUL && p->lastinvite) {
+ 		/* We need to stop retransmitting the 401 */
+-		__sip_ack(p, p->lastinvite, 1, 0);
++		__sip_ack(p, p->lastinvite, 1, 0, 0);
+ 	}
+ 
+ 	publish_type = determine_sip_publish_type(req, event, etag, expires_str, &expires_int);
+@@ -29514,12 +29808,15 @@
+ 	case SIP_UPDATE:
+ 		res = handle_request_update(p, req);
+ 		break;
++	case SIP_PRACK:
++		res = handle_request_prack(p, req);
++		break;
+ 	case SIP_ACK:
+ 		/* Make sure we don't ignore this */
+ 		if (seqno == p->pendinginvite) {
+ 			p->invitestate = INV_TERMINATED;
+ 			p->pendinginvite = 0;
+-			acked = __sip_ack(p, seqno, 1 /* response */, 0);
++			acked = __sip_ack(p, seqno, 1 /* response */, 0, 0);
+ 			if (find_sdp(req)) {
+ 				if (process_sdp(p, req, SDP_T38_NONE)) {
+ 					return -1;
+@@ -29532,7 +29829,7 @@
+ 		} else if (p->glareinvite == seqno) {
+ 			/* handle ack for the 491 pending sent for glareinvite */
+ 			p->glareinvite = 0;
+-			acked = __sip_ack(p, seqno, 1, 0);
++			acked = __sip_ack(p, seqno, 1, 0, 0);
+ 		}
+ 		if (!acked) {
+ 			/* Got an ACK that did not match anything. Ignore
+@@ -31291,6 +31588,9 @@
+ 	} else if (!strcasecmp(v->name, "buggymwi")) {
+ 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
+ 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
++	} else if (!strcasecmp(v->name, "prack")) {
++		ast_set_flag(&mask[2], SIP_PAGE3_PRACK);
++		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_PRACK);
+ 	} else
+ 		res = 0;
+ 
+@@ -32563,6 +32863,7 @@
+ 	externtcpport = STANDARD_SIP_PORT;
+ 	externtlsport = STANDARD_TLS_PORT;
+ 	sip_cfg.srvlookup = DEFAULT_SRVLOOKUP;
++	sip_cfg.early_media_focus = DEFAULT_EARLY_MEDIA_FOCUS;
+ 	global_tos_sip = DEFAULT_TOS_SIP;
+ 	global_tos_audio = DEFAULT_TOS_AUDIO;
+ 	global_tos_video = DEFAULT_TOS_VIDEO;
+@@ -32939,6 +33240,8 @@
+ 			global_match_auth_username = ast_true(v->value);
+ 		} else if (!strcasecmp(v->name, "srvlookup")) {
+ 			sip_cfg.srvlookup = ast_true(v->value);
++		} else if (!strcasecmp(v->name, "earlymediafocus")) {
++			sip_cfg.early_media_focus = ast_true(v->value);
+ 		} else if (!strcasecmp(v->name, "pedantic")) {
+ 			sip_cfg.pedanticsipchecking = ast_true(v->value);
+ 		} else if (!strcasecmp(v->name, "maxexpirey") || !strcasecmp(v->name, "maxexpiry")) {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/sip/include/dialog.h asterisk-11.3.0/channels/sip/include/dialog.h
+--- asterisk-base-11.3.0/channels/sip/include/dialog.h	2013-05-27 15:56:01.728687989 +0100
++++ asterisk-11.3.0/channels/sip/include/dialog.h	2013-05-28 12:44:49.880445984 +0100
+@@ -67,7 +67,7 @@
+ 
+ /*! \brief Acknowledges receipt of a packet and stops retransmission
+  * called with p locked*/
+-int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod);
++int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, uint32_t rseqno);
+ 
+ /*! \brief Pretend to ack all packets
+  * called with p locked */
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/sip/include/reqresp_parser.h asterisk-11.3.0/channels/sip/include/reqresp_parser.h
+--- asterisk-base-11.3.0/channels/sip/include/reqresp_parser.h	2013-05-27 15:56:01.732687818 +0100
++++ asterisk-11.3.0/channels/sip/include/reqresp_parser.h	2013-05-28 12:44:49.876437894 +0100
+@@ -156,6 +156,14 @@
+ unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len);
+ 
+ /*!
++ * \brief Parse required header in incoming packet or response
++ *	returns bitmap
++ * 
++ * \param option list
++ */
++unsigned int parse_required_sip_options(const char *options);
++
++/*!
+  * \brief Compare two URIs as described in RFC 3261 Section 19.1.4
+  *
+  * \param input1 First URI
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/sip/include/sip.h asterisk-11.3.0/channels/sip/include/sip.h
+--- asterisk-base-11.3.0/channels/sip/include/sip.h	2013-05-27 15:56:01.744687819 +0100
++++ asterisk-11.3.0/channels/sip/include/sip.h	2013-05-28 15:30:21.445901000 +0100
+@@ -161,7 +161,7 @@
+  *  \todo This string should be set dynamically. We only support REFER and SUBSCRIBE if we have
+  *  allowsubscribe and allowrefer on in sip.conf.
+  */
+-#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH"
++#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH, PRACK"
+ 
+ /*! \brief Standard SIP unsecure port for UDP and TCP from RFC 3261. DO NOT CHANGE THIS */
+ #define STANDARD_SIP_PORT	5060
+@@ -194,6 +194,7 @@
+ #define DEFAULT_MWI_FROM       ""
+ #define DEFAULT_NOTIFYMIME     "application/simple-message-summary"
+ #define DEFAULT_ALLOWGUEST     TRUE
++#define DEFAULT_EARLY_MEDIA_FOCUS	FALSE;	/*!< Focus on a single early media stream */
+ #define DEFAULT_RTPKEEPALIVE   0      /*!< Default RTPkeepalive setting */
+ #define DEFAULT_CALLCOUNTER    FALSE   /*!< Do not enable call counters by default */
+ #define DEFAULT_SRVLOOKUP      TRUE    /*!< Recommended setting is ON */
+@@ -234,6 +235,7 @@
+ #define DEFAULT_ENGINE     "asterisk"      /*!< Default RTP engine to use for sessions */
+ #define DEFAULT_STORE_SIP_CAUSE FALSE      /*!< Don't store HASH(SIP_CAUSE,<channel name>) for channels by default */
+ #endif
++#define DEFAULT_PRACK  FALSE           /*!< Default: Prack is turned off */
+ #define DEFAULT_AMR_MODE      -1
+ #define DEFAULT_OCTET_ALIGN   TRUE
+ #define DEFAULT_VIDEO_SIZE    1  /*! < 1 = CIF */
+@@ -386,10 +388,14 @@
+ #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 4)  /*!< DP: Only send direct media reinvites on outgoing calls */
+ #define SIP_PAGE3_USE_AVPF               (1 << 5)  /*!< DGP: Support a minimal AVPF-compatible profile */
+ #define SIP_PAGE3_ICE_SUPPORT            (1 << 6)  /*!< DGP: Enable ICE support */
++#define SIP_PAGE3_PRACK               	 (1 << 7)  /*!< DPG: Allow snom aoc messages */
++#define SIP_PAGE3_100REL               	 (1 << 8)  /*!< D: If PRACK is active for a specific dialog */
++#define SIP_PAGE3_INVITE_WAIT_FOR_PRACK  (1 << 9)  /*!< D: Wait for PRACK response before sending 200 OK */
++#define SIP_PAGE3_ANSWER_WAIT_FOR_PRACK	 (1 << 10)  /*!< D: Send ANSWER when PRACK is received */
+ 
+ #define SIP_PAGE3_FLAGS_TO_COPY \
+ 	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_SRTP_TAG_32 | SIP_PAGE3_NAT_AUTO_RPORT | SIP_PAGE3_NAT_AUTO_COMEDIA | \
+-	 SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_AVPF | SIP_PAGE3_ICE_SUPPORT)
++	 SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_AVPF | SIP_PAGE3_ICE_SUPPORT | SIP_PAGE3_PRACK)
+ 
+ #define CHECK_AUTH_BUF_INITLEN   256
+ 
+@@ -448,6 +454,7 @@
+  * where the original response would be sent RELIABLE in an INVITE transaction
+  */
+ enum xmittype {
++	XMIT_PRACK = 3,    /*!< Transmit response the PRACK way: reliably, with re-transmits. */
+ 	XMIT_CRITICAL = 2,    /*!< Transmit critical SIP message reliably, with re-transmits.
+ 	                       *   If it fails, it's critical and will cause a teardown of the session */
+ 	XMIT_RELIABLE = 1,    /*!< Transmit SIP message reliably, with re-transmits */
+@@ -622,7 +629,7 @@
+ 	SIP_NOTIFY,     /*!< Status update, Part of the event package standard, result of a SUBSCRIBE or a REFER */
+ 	SIP_INVITE,     /*!< Set up a session */
+ 	SIP_ACK,        /*!< End of a three-way handshake started with INVITE. */
+-	SIP_PRACK,      /*!< Reliable pre-call signalling. Not supported in Asterisk. */
++	SIP_PRACK,      /*!< Reliable pre-call signalling. */
+ 	SIP_BYE,        /*!< End of a session */
+ 	SIP_REFER,      /*!< Refer to another URI (transfer) */
+ 	SIP_SUBSCRIBE,  /*!< Subscribe for updates (voicemail, session status, device status, presence) */
+@@ -745,6 +752,7 @@
+ 	      be applied to devices (trunks, services, phones)
+ */
+ struct sip_settings {
++	int early_media_focus;		/*!< G: Focus on the first early media stream received, ignore the rest */
+ 	int peer_rtupdate;          /*!< G: Update database with registration data for peer? */
+ 	int rtsave_sysname;         /*!< G: Save system name at registration? */
+ 	int ignore_regexpire;       /*!< G: Ignore expiration of peer  */
+@@ -826,6 +834,8 @@
+ 	int headers;            /*!< # of SIP Headers */
+ 	int method;             /*!< Method of this request */
+ 	int lines;              /*!< Body Content */
++	uint32_t rseqno;                /*!< PRACK Rseq */
++	unsigned int reqsipoptions;  /*!< Required SIP options for this answer */
+ 	unsigned int sdp_start; /*!< the line number where the SDP begins */
+ 	unsigned int sdp_count; /*!< the number of lines of SDP */
+ 	char debug;             /*!< print extra debugging if non zero */
+@@ -834,6 +844,7 @@
+ 	//--- ISUP ---
+ 	char embedded_isup;
+ 	char authenticated;     /*!< non-zero if this request was authenticated */
++	char ignoresdp;         /*!< In some cases, we have to ignore the SDP in responses */
+ 	ptrdiff_t header[SIP_MAX_HEADERS]; /*!< Array of offsets into the request string of each SIP header*/
+ 	ptrdiff_t line[SIP_MAX_LINES];     /*!< Array of offsets into the request string of each SDP line*/
+ 	struct ast_str *data;	
+@@ -841,7 +852,6 @@
+ 	/* XXX Do we need to unref socket.ser when the request goes away? */
+ 	struct sip_socket socket;          /*!< The socket used for this request */
+ 	AST_LIST_ENTRY(sip_request) next;
+-	unsigned int reqsipoptions; /*!< Items needed for Required header in responses */
+ };
+ 
+ /* \brief given a sip_request and an offset, return the char * that resides there
+@@ -1053,6 +1063,8 @@
+ 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
+ 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
+ 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
++		AST_STRING_FIELD(theirtag_prack);  /*!< Current tag focus for PRACK handling */
++		AST_STRING_FIELD(theirtag_early);  /*!< Current tag focus for early media handling */
+ 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
+ 		AST_STRING_FIELD(username);     /*!< [user] name */
+ 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */
+@@ -1097,6 +1109,8 @@
+ 	uint32_t ocseq;                         /*!< Current outgoing seqno */
+ 	uint32_t icseq;                         /*!< Current incoming seqno */
+ 	uint32_t init_icseq;                    /*!< Initial incoming seqno from first request */
++	uint32_t rseq;                          /*!< Current PRACK rseq on our side*/
++	uint32_t irseq;                         /*!< Current PRACK rseq on their side*/
+ 	ast_group_t callgroup;                  /*!< Call group */
+ 	ast_group_t pickupgroup;                /*!< Pickup group */
+ 	struct ast_namedgroups *named_callgroups;   /*!< Named call group */
+@@ -1276,6 +1290,7 @@
+ 	int retrans;              /*!< Retransmission number */
+ 	int method;               /*!< SIP method for this packet */
+ 	uint32_t seqno;           /*!< Sequence number */
++	uint32_t rseqno;           /*!< PRACK Sequence number */
+ 	char is_resp;             /*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
+ 	char is_fatal;            /*!< non-zero if there is a fatal error */
+ 	int response_code;        /*!< If this is a response, the response code */
+@@ -1897,7 +1912,7 @@
+ 	char * const text;  /*!< Text id, as in standard */
+ } sip_options[] = {	/* XXX used in 3 places */
+ 	/* RFC3262: PRACK 100% reliability */
+-	{ SIP_OPT_100REL,	NOT_SUPPORTED,	"100rel" },
++	{ SIP_OPT_100REL,	SUPPORTED,	"100rel" },
+ 	/* RFC3959: SIP Early session support */
+ 	{ SIP_OPT_EARLY_SESSION, NOT_SUPPORTED,	"early-session" },
+ 	/* SIMPLE events:  RFC4662 */
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/sip/reqresp_parser.c asterisk-11.3.0/channels/sip/reqresp_parser.c
+--- asterisk-base-11.3.0/channels/sip/reqresp_parser.c	2013-05-27 15:56:01.760687797 +0100
++++ asterisk-11.3.0/channels/sip/reqresp_parser.c	2013-05-28 12:44:49.888438027 +0100
+@@ -1575,18 +1575,13 @@
+ }
+ 
+ /*!
+- * \brief Parse supported header in incoming packet
+- *
+- * \details This function parses through the options parameters and
+- * builds a bit field representing all the SIP options in that field. When an
+- * item is found that is not supported, it is copied to the unsupported
+- * out buffer.
+- *
++ * \brief Parse supported or required header in incoming packet
+  * \param option list
+  * \param unsupported out buffer (optional)
+  * \param unsupported out buffer length (optional)
++ * \param response True if this is a required header from a response
+  */
+-unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len)
++static unsigned int _parse_sip_options(const char *options, char *unsupported, size_t unsupported_len)
+ {
+ 	char *next, *sep;
+ 	char *temp;
+@@ -1606,7 +1601,7 @@
+ 
+ 	temp = ast_strdupa(options);
+ 
+-	ast_debug(3, "Begin: parsing SIP \"Supported: %s\"\n", options);
++	ast_debug(3, "Begin: parsing SIP \"Required:\" or \"Supported: %s\"\n", options);
+ 
+ 	for (next = temp; next; next = sep) {
+ 		found = FALSE;
+@@ -1802,6 +1797,35 @@
+ 	return res;
+ }
+ 
++/*!
++ * \brief Parse supported header in incoming packet
++ *
++ * \details This function parses through the options parameters and
++ * builds a bit field representing all the SIP options in that field. When an
++ * item is found that is not supported, it is copied to the unsupported
++ * out buffer.
++ *
++ * \param option list
++ * \param unsupported out buffer (optional)
++ * \param unsupported out buffer length (optional)
++ */
++unsigned int parse_sip_options(const char *options, char *unsupported, size_t unsupported_len)
++{
++	return _parse_sip_options(options, unsupported, unsupported_len);
++}
++
++/*!
++ * \brief required header in incoming packet or response
++ *	returns bitmap
++ * 
++ * \param option list
++ */
++unsigned int parse_required_sip_options(const char *options)
++{
++	return _parse_sip_options(options, NULL, 0 );
++}
++
++
+ /*! \brief helper routine for sip_uri_cmp to compare URI parameters
+  *
+  * This takes the parameters from two SIP URIs and determines
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/configs/sip.conf.sample asterisk-11.3.0/configs/sip.conf.sample
+--- asterisk-base-11.3.0/configs/sip.conf.sample	2013-05-27 15:56:01.476688054 +0100
++++ asterisk-11.3.0/configs/sip.conf.sample	2013-05-28 12:44:49.916437618 +0100
+@@ -247,6 +247,12 @@
+                                 ; and multiline formatted headers for strict
+                                 ; SIP compatibility (defaults to "yes")
+ 
++;prack=yes			; Enable PRACK (SIP option 100rel)  support. (defaults to "no")
++				; Can also be set on a per device basis.
++
++;prack=yes			; Enable PRACK (SIP option 100rel)  support. (defaults to "no")
++				; Can also be set on a per device basis.
++
+ ; See https://wiki.asterisk.org/wiki/display/AST/IP+Quality+of+Service for a description of these parameters.
+ ;tos_sip=cs3                    ; Sets TOS for SIP packets.
+ ;tos_audio=ef                   ; Sets TOS for RTP audio packets.
+@@ -359,6 +365,14 @@
+                                 ;
+                                 ; In order for "noanswer" applications to work, you need to run
+                                 ; the progress() application in the priority before the app.
++;earlymediafocus=yes		; If you have a forking SIP proxy in the call, Asterisk may get multiple
++				; 183/180 responses with SDP from *different* devices. The default is that 
++				; Asterisk jumps on to each one. There's no *correct* solution to this
++				; problem. Turning this on means that Asterisk focuses on the *first*
++				; early media response and ignores the rest. This might mean that the
++				; user gets a ring tone and stays with that even if the service provider
++				; from a different media server plays a very important message.
++				; Default is "no" - jump to the latest one.
+ 
+ ;progressinband=never           ; If we should generate in-band ringing always
+                                 ; use 'never' to never use in-band signalling, even in cases
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/README.darjeeling asterisk-11.3.0/README.darjeeling
+--- asterisk-base-11.3.0/README.darjeeling	1970-01-01 01:00:00.000000000 +0100
++++ asterisk-11.3.0/README.darjeeling	2013-05-28 12:44:49.892444588 +0100
+@@ -0,0 +1,129 @@
++Edvina AB
++Olle E. Johansson
++
++
++Project started: 2012-06-15
++Updated to Asterisk 11: 2013-03-15
++
++
++
++Darjeeling-prack-11
++-------------------
++
++This branch will implement PRACK in the SIP stack of Asterisk.
++
++PRACK stands for reliable unreliable provisional responses.
++
++In SIP, the provisional responses are often sent over UDP, which means that they can
++get lost. Some of them are retransmitted every minute (to get at least one through
++once during a three minute period following RFC 3261). For some messages, it's 
++important that they get through immediately. Like if you want to play a message to
++the customer that his call will be cancelled due to lack of funds in his account.
++
++PRACK adds a retransmit and ACK mechanism to the 1xx messages excluding 100 (since
++it's transmitted hop-by-hop).
++
++Configuration
++=============
++Add prack=yes in the [general] section of sip.conf or in device configurations. 
++Asterisk will now add 100rel to the list of supported options. If the other device
++supports PRACK Asterisk will activate it or support it if the other side
++requires it.
++There's currently no support for requiring PRACK in a call.
++
++
++Technichal details
++==================
++
++If the INVITE contains
++	Supported: 100rel
++
++then the 1xx answer can add 
++	Require: 100rel
++	Rseq: 	42
++
++The Rseq is the PRACK sequence number
++The caller then needs to confirm the message with a new request, during the INVITE transaction
++	PRACK
++	RAck: 	42	<cseq #> <cseq method>
++
++And the callee confirms this (and close the PRACK transaction) with a 200 OK.
++
++If the PRACK is not received in time, the 1xx response will be retransmitted.
++There can only be ONE outstanding PRACK, which makes it easier to integrate in the
++Asterisk SIP stack that unfortunately lacks a transaction layer.
++
++PRACK is documented in RFC 3262.
++
++Retransmission works like the retransmission of responses to INVITE (like the 200 OK).
++It starts with T1 and doubles for each retransmission. Unlike INVITE responses,
++the retransmission timer does not cap at T2.
++
++If retransmission times out, a 5xx message should terminate the INVITE transaction.
++
++
++A PRACK received that does not match existing SIP_PVT is responded to with 481.
++
++* When to stop?
++---------------
++From the RFC: 
++"The UAS MAY send a final response to the initial request before having received PRACKs for all unacknowledged
++reliable provisional responses, unless the final response is 2xx and any of the unacknowledged
++reliable provisional responses contained a session description. In that case, it MUST NOT send a final response
++until those provisional responses are acknowledged. If the UAS does send a final response when
++reliable responses are still unacknowledged, it SHOULD NOT continue to retransmit the unacknowledged
++reliable provisional responses, but it MUST be prepared to process PRACK requests for those outstanding
++responses. A UAS MUST NOT send new reliable provisional responses (as opposed to retransmissions of
++unacknowledged ones) after sending a final response to a request"
++
++* Receive in order until final response
++---------------------------------------
++"Handling of subsequent reliable provisional responses for the same initial request follows the same rules
++as above, with the following difference: reliable provisional responses are guaranteed to be in order. As a
++result, if the UAC receives another reliable provisional response to the same request, and its RSeq value
++is not one higher than the value of the sequence number, that response MUST NOT be acknowledged with a
++PRACK, and MUST NOT be processed further by the UAC. An implementation MAY discard the response,
++or MAY cache the response in the hopes of receiving the missing responses.
++The UAC MAY acknowledge reliable provisional responses received after the final response or MAY discard
++them."
++
++* When do the call begin?
++-------------------------
++A corner case that I don't know if it's implemented: If we receive and INVITE without SDP, we MUST
++add SDP offer to the reliable answer and the caller must add an SDP answer to the PRACK. This means 
++that the session begins in the middle of the INVITE transaction.
++"Once an answer has been sent or received, the UA SHOULD establish the session based on the parameters of
++the offer and answer, even if the original INVITE itself has not been responded to." (section 5)
++
++* Security
++----------
++"The PRACK request can be injected by attackers to force retransmissions of reliable provisional responses to
++cease. As these responses can convey important information, PRACK messages SHOULD be authenticated
++as any other request." (section 9)
++
++Todo
++----
++* Add PRACK to the list of supported headers
++	- done
++* Should we be able to REQUIRE prack? Based on what? _SIPREQUIREPRACK ?
++	- not now
++* PRACK enabled globally and per device - user and peer
++	- done
++* PRACK working when Asterisk is the UAS
++	- done
++* PRACK working when Asterisk is the UAC
++	- done
++* PRACK with authentication
++	- not done
++* Requesting auth for PRACK
++	- not done
++* PRACK in "sip show settings"
++	- done
++* PRACK in "sip show peer xxx"
++	- done
++* PRACK in "sip show channel xxx"
++	- done
++
++---------------------
++The patch is (C) Copyright by Edvina AB, Sollentuna, Sweden. 
++Developed by Olle E. Johansson, oej@edvina.net
