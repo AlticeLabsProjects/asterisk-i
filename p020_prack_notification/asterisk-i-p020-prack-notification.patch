@@ -1,0 +1,222 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2013-05-29 15:51:19.824687702 +0100
++++ asterisk-11.3.0/apps/app_wms.c	2013-06-03 11:35:43.791710000 +0100
+@@ -748,6 +748,17 @@
+ 					// ast_softhangup(chan, AST_CAUSE_NORMAL);// hangup line
+                break;
+ 				}
++				else if(f->frametype == AST_FRAME_CONTROL && who == chan && f->subclass.integer == AST_CONTROL_PRACK)
++				{
++				   if (option_verbose >= 3)
++				      ast_verbose(VERBOSE_PREFIX_3 "Got control PRACK on channel %s\n", ast_channel_name(chan));
++
++				   chan_vars->trs_reply.event = UNSOLICITED_EVENT;
++				   chan_vars->trs_reply.evt_type = SIP_PRACK;
++				   chan_vars->trs_reply.error = FALSE;
++
++				   asteriskSendReply(&chan_vars->trs_reply, chan_vars);
++				}
+ 				if (chan_vars->asr.asr_sock > 0) 
+             {
+                if (who == chan && (f->frametype == AST_FRAME_DTMF || 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
+--- asterisk-base-11.3.0/apps/vsrvdefs.h	2013-05-29 15:51:19.776437791 +0100
++++ asterisk-11.3.0/apps/vsrvdefs.h	2013-06-03 11:35:17.153410000 +0100
+@@ -207,6 +207,7 @@
+    CONFERENCE_EVENT                 = 213,
+    SIP_INFO                         = 214,
+    FAX_PAGE_DETECTED                = 215,
++   SIP_PRACK                        = 216,
+ 	TOTAL_NUMBER_EVENT_TYPES
+ }event_type;
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-05-30 15:59:24.484687853 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-06-06 14:50:13.240437453 +0100
+@@ -887,6 +887,8 @@
+ static int global_amr_octetalign = DEFAULT_OCTET_ALIGN;
+ static int global_dtmf_flashsupport = 1;
+ static char global_reject_mode[AST_MAX_EXTENSION]; /*! strlen = 0 - ignore SIP OPTIONS, strlen > 0 - responde xx to SIP OPTIONS */
++static int global_number_ic_headers = 0;
++static char global_ic_headers[32][64];
+ /*@}*/
+ 
+ /*!
+@@ -18598,6 +18600,8 @@
+ {
+    struct sip_request *req;
+    int i;
++   char buffer[64];
++   char tmp[2048];
+ 
+    req = oreq;
+    if (!req)
+@@ -18605,13 +18609,67 @@
+ 
+    p->ic_extra_data[0] = '\0';
+ 
+-   for (i = 1; i < req->headers; i++)
++   if(global_number_ic_headers == 0 || !strcasecmp(global_ic_headers[0],"all"))
+    {
+-      const char *header = REQ_OFFSET_TO_STR(req, header[i]);
+-      if (strlen(p->ic_extra_data) + strlen(header) < sizeof(p->ic_extra_data))
++      for (i = 1; i < req->headers; i++)
+       {
+-         if (p->ic_extra_data[0] == '\0') sprintf(p->ic_extra_data, "%s", header);
+-         else sprintf(p->ic_extra_data, "%s%c%s", p->ic_extra_data, 29, header);
++         const char *header = REQ_OFFSET_TO_STR(req, header[i]);
++         if (strlen(p->ic_extra_data) + strlen(header) < sizeof(p->ic_extra_data))
++         {
++            if (p->ic_extra_data[0] == '\0') sprintf(p->ic_extra_data, "%s", header);
++            else
++            {
++               snprintf(tmp, sizeof(tmp),"%s%c%s", p->ic_extra_data, 29, header);
++               snprintf(p->ic_extra_data, sizeof(p->ic_extra_data), "%s", tmp);
++            }
++         }
++         else
++         {
++            ast_log(LOG_WARNING, "Extra data too long!\n");
++            return -1;
++         }
++      }
++   }
++   else
++   {
++      for(i = 0; i < global_number_ic_headers; i++)
++      {
++         snprintf(buffer, sizeof(buffer), "%s", sip_get_header(req, global_ic_headers[i]));
++
++         if(buffer[0] != '\0')
++         {
++            if (strlen(p->ic_extra_data) + strlen(buffer) < sizeof(p->ic_extra_data))
++            {
++               if (p->ic_extra_data[0] == '\0') sprintf(p->ic_extra_data, "%s", buffer);
++               else
++               {
++                  snprintf(tmp, sizeof(tmp),"%s%c%s: %s", p->ic_extra_data, 29, global_ic_headers[i], buffer);
++                  snprintf(p->ic_extra_data, sizeof(p->ic_extra_data), "%s", tmp);
++               }
++            }
++            else
++            {
++               ast_log(LOG_WARNING, "Extra data too long!\n");
++               return -1;
++            }
++         }
++      }
++   }
++   if(global_number_ic_headers >= 0)
++   {
++      if(!req->sdp_count)
++         sprintf(buffer, "X-WMS-MEDIA: inactive");
++      else
++         sprintf(buffer, "X-WMS-MEDIA: active");
++
++      if (strlen(p->ic_extra_data) + strlen(buffer) < sizeof(p->ic_extra_data))
++      {
++         if (p->ic_extra_data[0] == '\0') sprintf(p->ic_extra_data, "%s", buffer);
++         else
++         {
++            snprintf(tmp, sizeof(tmp),"%s%c%s", p->ic_extra_data, 29, buffer);
++            snprintf(p->ic_extra_data, sizeof(p->ic_extra_data), "%s", tmp);
++         }
+       }
+       else
+       {
+@@ -18619,6 +18677,8 @@
+          return -1;
+       }
+    }
++
++
+    if (sip_debug_test_pvt(p))
+       ast_verbose("Headers: %s\n", p->ic_extra_data);
+ 
+@@ -26432,6 +26492,20 @@
+ 		sip_answer(p->owner);
+ 	}
+ 	ast_clear_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);	/* Clear flag */
++
++	if (find_sdp(req)) {
++	   ast_debug(3, "!=!=!=!=!=!= Found SDP in PRACK \n");
++	   if (process_sdp(p, req, SDP_T38_NONE)) {
++	      return -1;
++	   }
++	   ast_debug(3, "!=!=!=!=!=!= Valid SDP in PRACK. Queue control frame \n");
++	   ast_queue_control(p->owner, AST_CONTROL_PRACK);
++
++	   if (ast_test_flag(&p->flags[0], SIP_DIRECT_MEDIA)) {
++	      ast_queue_control(p->owner, AST_CONTROL_SRCCHANGE);
++	   }
++	}
++
+ 	return 0;
+ }
+ 
+@@ -32942,6 +33016,7 @@
+ 	global_amr_mode = DEFAULT_AMR_MODE;
+ 	global_amr_octetalign = DEFAULT_OCTET_ALIGN;
+ 	global_dtmf_flashsupport = 1;
++	global_number_ic_headers = 0;
+ 
+ 	/* Initialize some reasonable defaults at SIP reload (used both for channel and as default for devices */
+ 	ast_copy_string(sip_cfg.default_context, DEFAULT_CONTEXT, sizeof(sip_cfg.default_context));
+@@ -33553,6 +33628,27 @@
+ 		} else if (!strcasecmp(v->name, "dsp_media")) { // Activate SMRA
+ 		   ast_set2_flag(&ast_options2, ast_true(v->value), AST_OPT_FLAG2_USE_SMRA);
+ 		}
++		else if(!strcasecmp(v->name, "icheaders")){ //Check what incoming call headers are needed
++		   char buf[64];
++		   char *word, *next = buf;
++
++		   ast_copy_string(buf, v->value, sizeof(buf));
++		   while ((word = strsep(&next, ","))) {
++		      if (!strcasecmp(word, "none")) {
++		         global_number_ic_headers = -1;
++		         break;
++		      } else if (!strcasecmp(word, "all")) {
++		         snprintf(global_ic_headers[0], sizeof(global_ic_headers[0]), "%s", word);
++		         global_number_ic_headers = 1;
++		         break;
++		      }
++		      if(global_number_ic_headers < 32)
++		      {
++		         snprintf(global_ic_headers[global_number_ic_headers], sizeof(global_ic_headers[global_number_ic_headers]), "%s", word);
++		         global_number_ic_headers++;
++		      }
++		   }
++		}
+ 		else if (!strcasecmp(v->name, "use_q850_reason")) {
+ 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_Q850_REASON);
+ 		} else if (!strcasecmp(v->name, "maxforwards")) {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/frame.h asterisk-11.3.0/include/asterisk/frame.h
+--- asterisk-base-11.3.0/include/asterisk/frame.h	2013-05-29 15:51:17.269187804 +0100
++++ asterisk-11.3.0/include/asterisk/frame.h	2013-06-03 11:29:15.969889000 +0100
+@@ -275,6 +275,7 @@
+ 	AST_CONTROL_MCID = 31,			/*!< Indicate that the caller is being malicious. */
+ 	AST_CONTROL_UPDATE_RTP_PEER = 32, /*!< Interrupt the bridge and have it update the peer */
+ 	AST_CONTROL_PVT_CAUSE_CODE = 33, /*!< Contains an update to the protocol-specific cause-code stored for branching dials */
++	AST_CONTROL_PRACK      = 99, /*!< If a PRACK is received with an SDP, the application should be informed */
+ };
+ 
+ enum ast_frame_read_action {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2013-05-29 15:52:14.140687820 +0100
++++ asterisk-11.3.0/main/channel.c	2013-06-03 12:06:46.559970000 +0100
+@@ -4434,6 +4434,7 @@
+ 	case AST_CONTROL_MCID:
+ 	case AST_CONTROL_UPDATE_RTP_PEER:
+ 	case AST_CONTROL_PVT_CAUSE_CODE:
++	case AST_CONTROL_PRACK:
+ 		break;
+ 
+ 	case AST_CONTROL_INCOMPLETE:
+@@ -4641,6 +4642,7 @@
+ 	case AST_CONTROL_END_OF_Q:
+ 	case AST_CONTROL_MCID:
+ 	case AST_CONTROL_UPDATE_RTP_PEER:
++	case AST_CONTROL_PRACK:
+ 		/* Nothing left to do for these. */
+ 		res = 0;
+ 		break;
