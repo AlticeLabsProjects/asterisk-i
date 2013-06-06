@@ -58,7 +58,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  static void destroy_msg_headers(struct sip_pvt *pvt);
  static int add_text(struct sip_request *req, struct sip_pvt *p);
  static int add_digit(struct sip_request *req, char digit, unsigned int duration, int mode);
-@@ -4426,6 +4469,18 @@
+@@ -4426,6 +4469,19 @@
  		return AST_FAILURE;
  	}
  	ast_str_set(&pkt->data, 0, "%s%s", ast_str_buffer(data), "\0");
@@ -71,6 +71,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +	   // This operation is done after ast_str_set because at this point
 +	   // pkt->data has sufficient memory space to accomodate message with ISUP
 +	   memcpy(pkt->data->str, data->str, ast_str_strlen(data));
++	   pkt->data->used = data->used;
 +	}
 +	//--- ISUP END ---
 +
