@@ -32,7 +32,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
 --- asterisk-base-11.3.0/channels/chan_sip.c	2013-05-30 15:59:24.484687853 +0100
-+++ asterisk-11.3.0/channels/chan_sip.c	2013-06-06 14:50:13.240437453 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-06-11 11:40:07.065187610 +0100
 @@ -887,6 +887,8 @@
  static int global_amr_octetalign = DEFAULT_OCTET_ALIGN;
  static int global_dtmf_flashsupport = 1;
@@ -91,7 +91,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         {
 +            if (strlen(p->ic_extra_data) + strlen(buffer) < sizeof(p->ic_extra_data))
 +            {
-+               if (p->ic_extra_data[0] == '\0') sprintf(p->ic_extra_data, "%s", buffer);
++               if (p->ic_extra_data[0] == '\0') sprintf(p->ic_extra_data, "%s: %s", global_ic_headers[i], buffer);
 +               else
 +               {
 +                  snprintf(tmp, sizeof(tmp),"%s%c%s: %s", p->ic_extra_data, 29, global_ic_headers[i], buffer);
