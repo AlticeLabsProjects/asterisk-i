@@ -1,0 +1,389 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-06-17 12:02:35.121191799 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-06-17 14:47:13.188437335 +0100
+@@ -705,6 +705,7 @@
+ unsigned char isupREL[] = { 0x0c, 0x02, 0x00, 0x02, 0x80, 0x90 };
+ unsigned char isupCPG_nocharge[] = { 0x2c, 0x01, 0x01, 0x11, 0x02, 0x15, 0x34, 0x29, 0x01, 0x0b, 0x00 };
+ unsigned char isupCPG_charge[] = { 0x2c, 0x01, 0x01, 0x11, 0x02, 0x16, 0x34, 0x29, 0x01, 0x0b, 0x00 };
++unsigned char isupIAM[] = { 0x01, 0x00, 0x60, 0x01, 0x0a, 0x00 };
+ //--- ISUP End ---
+ 
+ /*! \brief Readable descriptions of device states.
+@@ -886,6 +887,8 @@
+ static int global_amr_mode = DEFAULT_AMR_MODE;
+ static int global_amr_octetalign = DEFAULT_OCTET_ALIGN;
+ static int global_dtmf_flashsupport = 1;
++static int global_nature_called = 0x03;
++static int global_nature_calling = 0x03;
+ static char global_reject_mode[AST_MAX_EXTENSION]; /*! strlen = 0 - ignore SIP OPTIONS, strlen > 0 - responde xx to SIP OPTIONS */
+ static int global_number_ic_headers = 0;
+ static char global_ic_headers[32][64];
+@@ -13695,6 +13698,257 @@
+ 	}
+ }
+ 
++static int fetch_number(char *number_url, char **number_start, char **number_end)
++{
++   int retval = -1;
++
++   if (ast_strlen_zero(number_url))
++      return retval;
++
++   *number_start =  number_url;
++   if(!*number_start)
++      return retval;
++
++   if(**number_start == '<')
++      (*number_start)++;
++
++   // Check for the usual delimiter suspects
++   *number_end = strchr(*number_start, '>');
++   if(!*number_end)
++      *number_end = strchr(*number_start, '@');
++   // Settle for the entire string
++   if(!*number_end)
++      *number_end = *number_start + strlen(number_url);
++
++   return ((int)(*number_end - *number_start));
++}
++
++// convert the number to E.164 to use inside ISUP message
++static int convert_number_to_isup(unsigned char *dial_str, int dial_str_size, char *num_start, char *num_end, int is_called_party_number)
++{
++   int i;
++   char *digit;
++   char base = '0';
++
++   // Each pair of digits (each a char) of the number is converted into a single char
++   // The less significative part of the octet represents the the leftmost digit
++   // The full number is stopped by four set bits (fx or 0f) in the Called Party Number
++   // The number is not terminated in the Calling Party Number
++   // We use is_called_party_number as a boolean to differentiate behaviour for both options
++   for(i = 0, digit = num_start; (i < dial_str_size) && (digit <= num_end); i++, digit += 2)
++   {
++      base = '0';
++
++      if(*digit == '>' || *digit == '@' || *digit == '\0')
++      {
++         if(is_called_party_number == TRUE)
++         {
++            dial_str[i] = 0x0f;
++            ast_debug(3, "Encoded E.164 octet is: %x \n", dial_str[i]);
++         }
++         else
++            i--; // If it is calling party number then since we don't need this octet we can't count with it.
++
++         break;
++      }
++      else if (*digit >= base && *digit <= '9')
++      {
++         dial_str[i] = (*digit - base) & 0x0f;
++      }
++      else if (toupper(*digit) >= 'A' && toupper(*digit) < 'F')
++      {
++         base = 'A';
++
++         // Char isn't a number or the end of call but a valid tone which is either A...E with offset calculated from base
++         dial_str[i] = (toupper(*digit) - base + 0x0a) & 0x0f;
++      }
++      else // what to do with an unknown digit????
++      {
++      }
++
++      base = '0';
++
++      if(*(digit+1) == '>' || *(digit+1) == '@' || *(digit+1) == '\0')
++      {
++         if(is_called_party_number == TRUE)
++         {
++            dial_str[i] |= 0xf0;
++            ast_debug(3, "Encoded E.164 octet is: %x \n", dial_str[i]);
++         }
++         break;
++      }
++      else if (*(digit+1) >= base && *(digit+1) <= '9')
++      {
++         dial_str[i] |= ((*(digit+1) - base) << 4) & 0xf0;
++      }
++      else if (toupper(*(digit+1)) >= 'A' && toupper(*(digit+1)) < 'F')
++      {
++         base = 'A';
++
++         // Char isn't a number or the end of call but a valid tone which is either A...E with offset calculated from base (0x0a
++         dial_str[i] = ((toupper(*(digit+1)) - base + 0x0a) << 4) & 0xf0;
++      }
++      else // what to do with an unknown digit????
++      {
++      }
++      ast_debug(3, "Encoded E.164 octet is: %x \n", dial_str[i]);
++   }
++
++   // Return number of encoded bytes
++   return i+1;
++}
++
++static int build_isup_iam(struct sip_pvt *p, unsigned char *isup_buffer, int buffer_size)
++{
++   char *number_start=NULL, *number_end=NULL;
++   char *username;
++   int number_length;
++   int retval = -1;
++   int isup_iam_variable_length = 0;
++   int failed_calling_number_parse = 0;
++
++   if(ast_channel_cid_dnis(p->owner) != NULL)
++      number_length = fetch_number(ast_channel_cid_dnis(p->owner), &number_start, &number_end);
++   else
++   {
++      username = (char *)p->username;
++      number_length = fetch_number(username, &number_start, &number_end);
++   }
++
++   if(number_length + 5 /* fixed part below */ > buffer_size || number_length < 0 || number_length > 16 || !number_start || !number_end)
++   {
++      ast_debug(3, "Problem allocating memory. Size of buffer is %d. Number length is %d. Calculated from %s\n",
++            buffer_size, number_length, ast_channel_cid_dnis(p->owner) != NULL ? ast_channel_cid_dnis(p->owner) : p->username);
++      return retval;
++   }
++   if(atoi(number_start) == 0)
++   {
++      ast_debug(3, "Username selected is not a number: %s\n", number_start);
++      return retval;
++   }
++
++   ast_debug(3, "Using %s as ISUP Called Party Number (destination number) number_start at %c number_end at %c\n",
++         ast_channel_cid_dnis(p->owner) != NULL ? ast_channel_cid_dnis(p->owner) : p->username, *number_start, (*number_end == '\0' ? ' ' : *number_end));
++
++   // Called Party Number
++
++   // Pointer to parameter start
++   isup_buffer[sizeof(isupIAM)] = 0x02;
++   isup_iam_variable_length++;
++
++   // Next we need to record the pointer to the optional part which will come after the called party number
++   // After the pointer we have the size (in bytes) of the called party number. This field has a fixed size of one.
++   // We then have the properties of this number (2 bytes)
++   // The called party number size is number_length/2 + 1
++   // Adding them all up to get the pointer and adding one more for the start of the parameter
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = 1 + 2 + number_length/2 + 1 + 1;
++   isup_iam_variable_length++;
++
++   // After calculating the pointer size we record the size of this parameter (properties + called number)
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = 2 + number_length/2 + 1;
++   isup_iam_variable_length++;
++
++   // The next parameter holds this number properties (odd / even number of digits and fixed field denoting national number)
++   // For the Called Party Number we must add the Stop sending Address signal digit which counts for the odd/even
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = (((number_length+1)%2) << 7);
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] += global_nature_called;
++   isup_iam_variable_length++;
++
++   // More number properties
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = 0x90;
++   isup_iam_variable_length++;
++
++   // Convert the number to the isup used format aka E.164
++   // We want to limit the size of the number to 16 digits = 16/2
++   // retval will hold the number of octets written
++   retval = convert_number_to_isup(&isup_buffer[sizeof(isupIAM)+isup_iam_variable_length], 8, number_start, number_end, TRUE);
++
++   if(retval < 0)
++   {
++      ast_debug(3, "Failed Converting number(%s) to ISUP\n", ast_channel_cid_dnis(p->owner) != NULL ? ast_channel_cid_dnis(p->owner) : p->username);
++      return retval;
++   }
++
++   isup_iam_variable_length += retval;
++
++   // End of Called Party Number
++
++   // Calling Party Number
++
++   // The next parameter will store the value of the calling party value which will hold a magic number if the parameter is missing
++   if(ast_channel_cid_ani(p->owner) != NULL)
++      number_length = fetch_number(ast_channel_cid_ani(p->owner), &number_start, &number_end);
++   else
++      number_length = fetch_number((char *)p->fromuser, &number_start, &number_end);
++
++   if(number_length + isup_iam_variable_length + 4 /* fixed part below */ > buffer_size || number_length < 0 || number_length > 16 || !number_start || !number_end)
++   {
++      ast_debug(3, "Problem allocating memory. Size of buffer is %d. Number length is %d. Calculated from %s\n",
++                  buffer_size, number_length, ast_channel_cid_ani(p->owner) != NULL ? ast_channel_cid_ani(p->owner) : p->fromuser);
++      number_length = 3;
++      if(number_length + isup_iam_variable_length + 4 > buffer_size)
++         return -1;
++      failed_calling_number_parse = TRUE;
++   }
++
++   if(atoi(number_start) == 0)
++   {
++      number_length = 3;
++      failed_calling_number_parse = TRUE;
++   }
++
++   ast_debug(3, "Using %s as ISUP Calling Party Number (destination number) number_start at %c number_end at %c\n",
++         ast_channel_cid_ani(p->owner) != NULL ? ast_channel_cid_ani(p->owner) : p->fromuser, *number_start,
++         (*number_end == '\0' ? ' ' : *number_end));
++
++   // The next parameter indicates what type of variable element we're writing
++   // Calling Party Number
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = 0x0a;
++   isup_iam_variable_length++;
++
++   // After calculating the pointer size we record the size of this parameter (properties + called number)
++   // Unlike length in the Called Party number which needs to hold the stop sending indication which adds half an octet
++   // (in which case we always need one extra byte if it's odd or not), in the Calling Party number case we can save
++   //one octet if the number is even
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = 2 + number_length/2 + number_length%2;
++   isup_iam_variable_length++;
++
++   // The next parameter holds this number properties (odd / even number of digits and fixed field denoting national number)
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = ((number_length%2) << 7);
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] += global_nature_calling;
++   isup_iam_variable_length++;
++
++   // More Number properties
++   // If number is part of the numbering plan: 0x13 otherwise state that address is not available with: 0x19
++   isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = (failed_calling_number_parse == TRUE ? 0x19 : 0x13);
++   isup_iam_variable_length++;
++
++   // Convert the number to the isup used format aka E.164
++   // We want to limit the size of the number to 16 digits = 16/2
++   // retval will hold the number of octets written
++   if(failed_calling_number_parse == TRUE)
++   {
++      isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = 0xee;
++      isup_iam_variable_length++;
++      isup_buffer[sizeof(isupIAM)+isup_iam_variable_length] = 0x0e;
++      isup_iam_variable_length++;
++   }
++   else
++   {
++      retval = convert_number_to_isup(&isup_buffer[sizeof(isupIAM)+isup_iam_variable_length], 8, number_start, number_end, FALSE);
++      if(retval < 0)
++      {
++         ast_debug(3, "Failed Converting number(%s) to ISUP\n", ast_channel_cid_ani(p->owner));
++         return retval;
++      }
++
++      isup_iam_variable_length += retval;
++   }
++
++   return isup_iam_variable_length;
++}
++
++
+ /*! \brief Add Session Description Protocol message
+ 
+     If oldsdp is TRUE, then the SDP version number is not incremented. This mechanism
+@@ -13755,6 +14009,8 @@
+ 	char isupcontent[128], contentdisp[128];
+ 	char multipartcontent[128];
+ 	unsigned char *isupdata;
++	unsigned char isup_buffer[128];
++	int isup_buffer_len;
+ 	char sdpcontent[128];
+ 	int isupdatalen;
+ 	int msgType;
+@@ -14086,10 +14342,12 @@
+  	   msgType = SIP_MSG_EARLY;
+  	else if (!strncmp(resp->data->str, "SIP/2.0 180 Ringing", 19))
+  	   msgType = SIP_MSG_RINGING;
++ 	else if(!strncmp(resp->data->str, "INVITE", 6))
++ 	   msgType = SIP_MSG_OUTGOING;
+  	else
+  	   msgType = SIP_MSG_OTHER;
+ 
+- 	if ((msgType == SIP_MSG_ANSWER || msgType == SIP_MSG_EARLY || msgType == SIP_MSG_RINGING) && ast_test_flag(&p->isupflags, ISUP_SIP_MSG))
++ 	if ((msgType == SIP_MSG_ANSWER || msgType == SIP_MSG_EARLY || msgType == SIP_MSG_RINGING || msgType == SIP_MSG_OUTGOING) && ast_test_flag(&p->isupflags, ISUP_SIP_MSG))
+  	{
+  	   if ((msgType == SIP_MSG_EARLY) && !ast_test_flag(&p->isupflags, ISUP_ACM_SENT))
+  	   {
+@@ -14155,6 +14413,34 @@
+  	         isupdatalen = sizeof(isupCON_nocharge);
+  	      }
+  	   }
++ 	   else if(msgType == SIP_MSG_OUTGOING)
++ 	   {
++ 	      isup_buffer_len = sizeof(isup_buffer) > sizeof(isupIAM) ? sizeof(isup_buffer) : sizeof(isupIAM);
++ 	      memcpy(isup_buffer, isupIAM, isup_buffer_len);
++ 	      /* sufficient space for the party numbers (w/terminating digit) 2*(9+1)/2 + 2*(parameter_type_size_1) +
++ 	         2*(parameter_length_size_1) + (optional_parameter_length_size_1) = 15
++ 	      * But if we consider that the maximum size for a phone number is 16 we should expand this number to 22.
++ 	      * Rounding up to the nearest power of 2: 32. */
++ 	      if((sizeof(isupIAM) + 32)  < sizeof(isup_buffer))
++ 	      {
++ 	         if((isupdatalen = build_isup_iam(p, isup_buffer, isup_buffer_len)) <= 0)
++ 	         {
++ 	           ast_log(LOG_WARNING, "Problem creating IAM message for outgoing call\n");
++ 	           ast_clear_flag(&p->isupflags, ISUP_SIP_MSG);
++ 	         }
++ 	         else
++ 	         {
++ 	            isupdata = isup_buffer;
++ 	            isupdatalen += sizeof(isup_buffer) > sizeof(isupIAM) ? sizeof(isupIAM) : sizeof(isup_buffer);
++ 	         }
++
++ 	      }
++ 	      else // buffer can't hold up message. Should never happen! In case it does, stop SIP-I for this call
++ 	      {
++ 	         ast_log(LOG_WARNING, "Insufficient size for SIP-I message\n");
++ 	         ast_clear_flag(&p->isupflags, ISUP_SIP_MSG);
++ 	      }
++ 	   }
+  	   else
+  	   {
+  	      if(ast_test_flag(&p->isupflags, ISUP_CHARGE))
+@@ -14296,7 +14582,7 @@
+ 
+ 	//--- ISUP ---
+ 	// After inserting the SDP we can insert the ISUP message if applicable
+-	if ((msgType == SIP_MSG_EARLY || msgType == SIP_MSG_ANSWER || msgType == SIP_MSG_RINGING) && ast_test_flag(&p->isupflags, ISUP_SIP_MSG))
++	if ((msgType == SIP_MSG_EARLY || msgType == SIP_MSG_ANSWER || msgType == SIP_MSG_RINGING || msgType == SIP_MSG_OUTGOING) && ast_test_flag(&p->isupflags, ISUP_SIP_MSG))
+ 	{
+ 	   add_content(resp, emptyline);
+ 	   add_content(resp, boundline);
+@@ -15286,6 +15572,12 @@
+ 	if (sipmethod == SIP_INVITE) {
+ 		add_diversion(&req, p);
+ 	}
++	//If we should use ISUP and this is the initial dialog INVITE
++	if(strlen(isupmime) && init > 1)
++	{
++	   ast_set_flag(&p->isupflags, ISUP_SIP_MSG);
++	}
++
+ 	if (sdp) {
+ 		offered_media_list_destroy(p);
+ 		if (p->udptl && p->t38.state == T38_LOCAL_REINVITE) {
+@@ -33016,6 +33308,8 @@
+ 	global_amr_mode = DEFAULT_AMR_MODE;
+ 	global_amr_octetalign = DEFAULT_OCTET_ALIGN;
+ 	global_dtmf_flashsupport = 1;
++	global_nature_called = 0x03;
++	global_nature_calling = 0x03;
+ 	global_number_ic_headers = 0;
+ 
+ 	/* Initialize some reasonable defaults at SIP reload (used both for channel and as default for devices */
+@@ -33627,9 +33921,18 @@
+ 		   ast_set2_flag(&ast_options2, ast_true(v->value), AST_OPT_FLAG2_SEND_RINGING);
+ 		} else if (!strcasecmp(v->name, "dsp_media")) { // Activate SMRA
+ 		   ast_set2_flag(&ast_options2, ast_true(v->value), AST_OPT_FLAG2_USE_SMRA);
+-		}
+-		else if(!strcasecmp(v->name, "icheaders")){ //Check what incoming call headers are needed
+-		   char buf[64];
++		} else if (!strcasecmp(v->name, "nature_called_party")) {
++		   if ((sscanf(v->value, "%d", &global_nature_called) != 1) || (global_nature_called < 0) || (global_nature_called > 128)) {
++		      ast_log(LOG_WARNING, "'%s' is not a valid Called Nature of address indicator. Using default 0x03.\n", v->value);
++		      global_nature_called = 0x03;
++		   }
++		} else if (!strcasecmp(v->name, "nature_calling_party")) {
++		   if ((sscanf(v->value, "%d", &global_nature_calling) != 1) || (global_nature_calling < 0) || (global_nature_calling > 128)) {
++		      ast_log(LOG_WARNING, "'%s' is not a valid Called Nature of address indicator. Using default 0x03.\n", v->value);
++		      global_nature_calling = 0x03;
++		   }
++		} else if(!strcasecmp(v->name, "icheaders")){ //Check what incoming call headers are needed
++		      char buf[64];
+ 		   char *word, *next = buf;
+ 
+ 		   ast_copy_string(buf, v->value, sizeof(buf));
