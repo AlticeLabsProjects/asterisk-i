@@ -1,0 +1,235 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/codecs/codec_amr.c asterisk-11.3.0/codecs/codec_amr.c
+--- asterisk-base-11.3.0/codecs/codec_amr.c	2013-06-19 16:17:31.060437709 +0100
++++ asterisk-11.3.0/codecs/codec_amr.c	2013-06-20 18:53:48.477111000 +0100
+@@ -488,6 +488,12 @@
+ 	if (parse_config(0))
+ 		return AST_MODULE_LOAD_DECLINE;
+ 
++	ast_format_set(&amrtolin.src_format, AST_FORMAT_AMRNB, 0);
++	ast_format_set(&amrtolin.dst_format, AST_FORMAT_SLINEAR, 0);
++
++	ast_format_set(&lintoamr.src_format, AST_FORMAT_SLINEAR, 0);
++	ast_format_set(&lintoamr.dst_format, AST_FORMAT_AMRNB, 0);
++
+ 	res = ast_register_translator(&amrtolin);
+ 	if (!res) 
+ 		res=ast_register_translator(&lintoamr);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/formats/format_amrnb.c asterisk-11.3.0/formats/format_amrnb.c
+--- asterisk-base-11.3.0/formats/format_amrnb.c	1970-01-01 01:00:00.000000000 +0100
++++ asterisk-11.3.0/formats/format_amrnb.c	2013-06-21 09:19:51.309268000 +0100
+@@ -0,0 +1,215 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 1999 - 2005, Digium, Inc.
++ *
++ * Mark Spencer <markster@digium.com>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ *
++ * \brief Save AMR samples into AMR format as specified in RFC 4867
++ * \note This is not an encoder/decoder. It only reads/writes the AMR frames
++ * to/from a file - thus, an AMR license is not required.
++ * \arg Extensions: amr
++ * \ingroup formats
++ */
++ 
++#include "asterisk.h"
++
++ASTERISK_FILE_VERSION(__FILE__, "$Revision: 0 $")
++
++#include <unistd.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <stdlib.h>
++#include <sys/time.h>
++#include <stdio.h>
++#include <errno.h>
++#include <string.h>
++
++#include "asterisk/mod_format.h"
++#include "asterisk/module.h"
++#include "asterisk/endian.h"
++
++#define	BUF_SIZE	33	/* 1 AMR frames mode 7 + ToC + CMR */
++#define	AMR_SAMPLES	160
++
++#define AMRNB_MAGIC_NUMBER "#!AMR\n"
++
++/* taken from RFC 4867 */
++static int AmrFrameSize[] = {   12, /* mode  0 =  95 bits */
++				13, /* mode  1 =  103 bits */
++				15, /* mode  2 =  118 bits */
++				17, /* mode  3 =  134 bits */
++				19, /* mode  4 =  148 bits */
++				20, /* mode  5 =  159 bits */
++				26, /* mode  6 =  204 bits */
++				31, /* mode  7 =  244 bits */
++				 5, /* mode  8 =   39 bits */
++				 0, /* mode  9 = not defined */
++				 0, /* mode 10 = not defined */
++				 0, /* mode 11 = not defined */
++				 0, /* mode 12 = not defined */
++				 0, /* mode 13 = not defined */
++				 0, /* mode 14 = not defined */
++				 0};/* mode 15 = not defined */
++
++static struct ast_frame *amrnb_read(struct ast_filestream *fs, int *whennext)
++{
++	int res, frame_size, enc_mode;
++	off_t offset = ftello(fs->f);
++	char file_header[sizeof(AMRNB_MAGIC_NUMBER)];
++
++	if (offset == 0) {
++		/* check file header */
++		if ((res = fread(file_header, 1, sizeof(AMRNB_MAGIC_NUMBER) - 1, fs->f)) != (sizeof(AMRNB_MAGIC_NUMBER) - 1)) {
++			ast_log(LOG_ERROR, "amrnb_read: Can't read file header (%s)!\n", strerror(errno));
++			return NULL;
++		}
++		file_header[sizeof(AMRNB_MAGIC_NUMBER) - 1] = '\0';
++		if (strncmp(file_header, AMRNB_MAGIC_NUMBER, strlen(AMRNB_MAGIC_NUMBER))) {
++			ast_log(LOG_ERROR, "amrnb_read: AMR file misses AMR header (magic number)!\n");
++			return NULL;
++		}
++	}
++
++	/* Send a frame from the file to the appropriate channel */
++	fs->fr.frametype = AST_FRAME_VOICE;
++	ast_format_set(&fs->fr.subclass.format, AST_FORMAT_AMRNB, 0);
++	fs->fr.mallocd = 0;
++	fs->fr.samples = AMR_SAMPLES;
++	AST_FRAME_SET_BUFFER(&fs->fr, fs->buf, AST_FRIENDLY_OFFSET, BUF_SIZE);
++	/* read ToC byte */
++	if ((res = fread(fs->fr.data.ptr, 1, 1, fs->f)) != 1) {
++		ast_log(LOG_ERROR, "amrnb_read: Can't read ToC byte (%s)!\n", strerror(errno));
++		return NULL;
++	}
++	enc_mode = ( ((char*)(fs->fr.data.ptr))[0] >> 3) & 0x0F;
++	frame_size = AmrFrameSize[enc_mode];
++	if ((res = fread(fs->fr.data.ptr+1, 1, frame_size, fs->f)) != frame_size) {
++		ast_log(LOG_ERROR, "amrnb_read: Short read (%d) instead of %d (%s)!\n", res, frame_size, strerror(errno));
++		return NULL;
++	}
++	fs->fr.datalen = frame_size+1;
++	*whennext = fs->fr.samples;
++	return &fs->fr;
++}
++
++static int amrnb_write(struct ast_filestream *fs, struct ast_frame *f)
++{
++	int res;
++	unsigned char *data = f->data.ptr;
++	int len = f->datalen;
++	int enc_mode, frame_size, frame_offset=0, frames=0,i;
++	off_t offset = ftello(fs->f);
++
++	if (offset == 0) {
++		/* write file header */
++		if ( (res = fwrite(AMRNB_MAGIC_NUMBER, 1, strlen(AMRNB_MAGIC_NUMBER), fs->f)) ) {
++			ast_log(LOG_ERROR, "amrnb_write: Can't write file header (%s)!\n", strerror(errno));
++			return -1;
++		}
++	}
++
++	if (f->frametype != AST_FRAME_VOICE) {
++		ast_log(LOG_WARNING, "amrnb_write: Asked to write non-voice frame!\n");
++		return -1;
++	}
++	if (f->subclass.format.id != AST_FORMAT_AMRNB) {
++		ast_log(LOG_WARNING, "amrnb_write: Asked to write non-AMRNB frame (%d)!\n", f->subclass.format.id);
++		return -1;
++	}
++	if (!data || !(len>=6)) {	/* at least 6 bytes is the VAD frame */
++		ast_log(LOG_WARNING, "amrnb_write: empty buffer!\n");
++		return -1;
++	}
++	/* we asume RTP octed aligned format (RFC 4867 section 4.4).
++	   Thus, skip first octed (CMR) */
++	data++;
++	len--;
++
++	/* get the number of frames in buffer */
++	while (len > 0) {
++		frames++;
++		/* first bit in ToC tells as if this is the last ToC byte */
++		if ( !(data[0] & 0x80) ) {
++			/* this was the last ToC byte */
++			break;
++		}
++		len--;
++		data++;
++	}
++
++	/* reset pointer */
++	data = f->data.ptr + 1; 	/* data always points to beginning of ToC */
++	len  = f->datalen - 1;	/* len is always the size of ToC+frames */
++
++	/* convert from RTP octed aligned format to AMR file format */
++	frame_offset = frames;
++	for (i=0; i<frames; i++) {
++	
++		/* enocder mode */
++		enc_mode = (data[i] >> 3) & 0x0F;
++		frame_size = AmrFrameSize[enc_mode];
++
++		if (frame_offset + frame_size > len) {
++			ast_log(LOG_ERROR, "amrnb_write: error decoding frame, exceeding buffer!\n");
++			return -1;
++		}
++
++		/* write ToC byte frame to file */
++		if ((res = fwrite(data+i, 1, 1, fs->f)) != 1) {
++				ast_log(LOG_ERROR, "amrnb_write: error writing ToC byte to file: %s\n", strerror(errno));
++				return -1;
++		}
++		/* write frame to file */
++		if ((res = fwrite(data+frame_offset, 1, frame_size, fs->f)) != frame_size) {
++				ast_log(LOG_WARNING, "amrnb_write: Bad write, only %d of %d bytes: %s\n", res, frame_size, strerror(errno));
++				return -1;
++		}
++		frame_offset += frame_size;
++	}	
++	return 0;
++}
++
++static struct ast_format_def amr_f = {
++	.name     = "amr_nb",
++	.exts     = "amr",
++	.open     = NULL,			/* check if file starts with magic number */
++	.rewrite  = NULL,
++	.write    = amrnb_write,	/* write to file */
++	.seek     = NULL,			/* seek number of smaples into file */
++	.trunc    = NULL,			/* truncate file at current position */
++	.tell     = NULL,			/* tell current position */
++	.read     = amrnb_read,		/* read from file and report when to get the next frame (in samples) */
++	.close    = NULL,			/* close the file */
++	.buf_size = BUF_SIZE + AST_FRIENDLY_OFFSET,
++};
++
++static int load_module(void)
++{
++   ast_format_set(&amr_f.format, AST_FORMAT_AMRNB, 0);
++	if(ast_format_def_register(&amr_f))
++	   return AST_MODULE_LOAD_FAILURE;
++
++   return AST_MODULE_LOAD_SUCCESS;
++}
++
++static int unload_module(void)
++{
++	return ast_format_def_unregister(amr_f.name);
++}	
++
++AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "AMR NB RFC 4867 file format");
++
