@@ -1,0 +1,251 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-11.3.0.p009/channels/chan_sip.c	2013-05-21 16:24:20.500687908 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-05-21 16:58:18.041350000 +0100
+@@ -7254,6 +7254,10 @@
+ 				else
+ 					transmit_response_reliable(p, "603 Declined", &p->initreq);
+ 				p->invitestate = INV_TERMINATED;
++
++				// If app_inasterisk fails or rejects call, we destroy sip channel immediatly
++				needdestroy = 1;
++
+ 			}
+ 		} else {	/* Call is in UP state, send BYE */
+ 			if (p->stimer->st_active == TRUE) {
+@@ -12181,11 +12185,13 @@
+ 			}
+ 		}
+ 
++/*
+ 		if (p->owner && ast_channel_hangupcause(p->owner)) {
+-			add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(ast_channel_hangupcause(p->owner)));
+-			snprintf(buf, sizeof(buf), "%d", ast_channel_hangupcause(p->owner));
+-			add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
++		   add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(ast_channel_hangupcause(p->owner)));
++		   snprintf(buf, sizeof(buf), "%d", ast_channel_hangupcause(p->owner));
++		   add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
+ 		}
++ */
+ 	}
+ 	return send_response(p, &resp, reliable, seqno);
+ }
+@@ -15768,7 +15774,7 @@
+ 		initreqprep(&req, p, SIP_MESSAGE, NULL);
+ 		initialize_initreq(p, &req);
+ 	} else {
+-		reqprep(&req, p, SIP_MESSAGE, 0, 1);
++		reqprep(&req, p, SIP_INFO, 0, 1);
+ 	}
+ 	if (auth) {
+ 		return transmit_request_with_auth(p, SIP_MESSAGE, p->ocseq, XMIT_RELIABLE, 0);
+@@ -15997,9 +16003,11 @@
+ 			add_header(&resp, "Reason", buf);
+ 		}
+ 
++		/*
+ 		add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(p->hangupcause));
+ 		snprintf(buf, sizeof(buf), "%d", p->hangupcause);
+ 		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
++		*/
+ 		break;
+ 	}
+ 	case SIP_MESSAGE:
+@@ -27373,10 +27381,10 @@
+ 		}
+ 	} else if (p->owner) {
+ 		sip_queue_hangup_cause(p, 0);
+-		sip_scheddestroy_final(p, DEFAULT_TRANS_TIMEOUT);
++		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+ 		ast_debug(3, "Received bye, issuing owner hangup\n");
+ 	} else {
+-		sip_scheddestroy_final(p, DEFAULT_TRANS_TIMEOUT);
++	   sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+ 		ast_debug(3, "Received bye, no owner, selfdestruct soon.\n");
+ 	}
+ 	ast_clear_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
+@@ -31978,8 +31986,8 @@
+ 	sip_cfg.allowsubscribe = FALSE;
+ 	sip_cfg.disallowed_methods = SIP_UNKNOWN;
+ 	sip_cfg.contact_acl = NULL;		/* Reset the contact ACL */
+-	snprintf(global_useragent, sizeof(global_useragent), "%s %s", DEFAULT_USERAGENT, ast_get_version());
+-	snprintf(global_sdpsession, sizeof(global_sdpsession), "%s %s", DEFAULT_SDPSESSION, ast_get_version());
++	snprintf(global_useragent, sizeof(global_useragent), "%s", DEFAULT_USERAGENT);
++	snprintf(global_sdpsession, sizeof(global_sdpsession), "%s", DEFAULT_SDPSESSION);
+ 	snprintf(global_sdpowner, sizeof(global_sdpowner), "%s", DEFAULT_SDPOWNER);
+ 	global_prematuremediafilter = TRUE;
+ 	ast_copy_string(default_notifymime, DEFAULT_NOTIFYMIME, sizeof(default_notifymime));
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/contrib/scripts/asterisk.logrotate asterisk-11.3.0/contrib/scripts/asterisk.logrotate
+--- asterisk-11.3.0.p009/contrib/scripts/asterisk.logrotate	2013-05-21 16:24:23.924437828 +0100
++++ asterisk-11.3.0/contrib/scripts/asterisk.logrotate	2013-05-21 17:57:30.224937789 +0100
+@@ -1,13 +1,13 @@
+-__LOGDIR__/debug __LOGDIR__/console __LOGDIR__/full __LOGDIR__/messages __LOGDIR__/*log {
+-	weekly
+-	missingok
+-	rotate 52
+-	compress
+-	delaycompress
+-	notifempty
+-	create 640 root root 
+-	sharedscripts
+-	postrotate
+-		__SBINDIR__/asterisk -rx 'logger reload' > /dev/null 2> /dev/null	
+-	endscript
+-} 
++/var/log/asterisk/*/*csv /var/log/asterisk/debug /var/log/asterisk/event_log /var/log/asterisk/messages /var/log/asterisk/full /var/log/asterisk/mmlog /var/log/asterisk/safe_asterisk.log /var/log/asterisk/queue_log {
++        create 640 asterisk asterisk
++        daily
++        missingok
++        compress
++        delaycompress
++        rotate 30
++        sharedscripts
++        postrotate
++                /usr/sbin/asterisk -rx 'logger reload' > /dev/null 2> /dev/null
++        endscript
++}
++
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/contrib/scripts/safe_asterisk asterisk-11.3.0/contrib/scripts/safe_asterisk
+--- asterisk-11.3.0.p009/contrib/scripts/safe_asterisk	2013-05-21 16:24:23.654093095 +0100
++++ asterisk-11.3.0/contrib/scripts/safe_asterisk	2013-05-21 17:15:19.104438109 +0100
+@@ -35,7 +35,7 @@
+ 
+ # set max files open with ulimit. On linux systems, this will be automatically
+ # set to the system's maximum files open devided by two, if not set here.
+-# MAXFILES=32768
++MAXFILES=32768
+ 
+ message() {
+ 	echo "$1" >&2
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/include/asterisk/causes.h asterisk-11.3.0/include/asterisk/causes.h
+--- asterisk-11.3.0.p009/include/asterisk/causes.h	2013-05-21 16:24:33.680687541 +0100
++++ asterisk-11.3.0/include/asterisk/causes.h	2013-05-21 17:17:21.439563000 +0100
+@@ -122,14 +122,18 @@
+ #define AST_CAUSE_SWITCH_CONGESTION             42
+ #define AST_CAUSE_ACCESS_INFO_DISCARDED         43
+ #define AST_CAUSE_REQUESTED_CHAN_UNAVAIL        44
++#define AST_CAUSE_RESOURCE_UNAVAILABLE          47
+ #define AST_CAUSE_FACILITY_NOT_SUBSCRIBED       50
+ #define AST_CAUSE_OUTGOING_CALL_BARRED          52
+ #define AST_CAUSE_INCOMING_CALL_BARRED          54
++#define AST_CAUSE_INCOMING_CALL_BARRED_CUG      55
+ #define AST_CAUSE_BEARERCAPABILITY_NOTAUTH      57
+ #define AST_CAUSE_BEARERCAPABILITY_NOTAVAIL     58
+ #define AST_CAUSE_BEARERCAPABILITY_NOTIMPL      65
+ #define AST_CAUSE_CHAN_NOT_IMPLEMENTED          66
+ #define AST_CAUSE_FACILITY_NOT_IMPLEMENTED      69
++#define AST_CAUSE_ONLY_RESTRICTED               70
++#define AST_CAUSE_SERVICE_NOT_IMPLEMENTED       79
+ #define AST_CAUSE_INVALID_CALL_REFERENCE        81
+ #define AST_CAUSE_INCOMPATIBLE_DESTINATION      88
+ #define AST_CAUSE_INVALID_MSG_UNSPECIFIED       95
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-11.3.0.p009/include/asterisk/channel.h	2013-05-21 16:24:34.212437394 +0100
++++ asterisk-11.3.0/include/asterisk/channel.h	2013-05-21 17:50:24.967467000 +0100
+@@ -3894,6 +3894,7 @@
+ void *ast_channel_generatordata(const struct ast_channel *chan);
+ void ast_channel_generatordata_set(struct ast_channel *chan, void *value);
+ 
++struct ast_callerid *ast_channel_cid(struct ast_channel *chan);
+ const char *ast_channel_url_params(const struct ast_channel *chan);
+ void ast_channel_url_params_set(struct ast_channel *chan, char *value);
+ const char *ast_channel_conf_playann(const struct ast_channel *chan);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-11.3.0.p009/main/channel.c	2013-05-21 16:26:01.016437823 +0100
++++ asterisk-11.3.0/main/channel.c	2013-05-22 09:22:29.804437777 +0100
+@@ -1750,6 +1750,28 @@
+ 	return ast_safe_sleep_conditional(chan, ms, NULL, NULL);
+ }
+ 
++static void free_cid(struct ast_callerid *cid)
++{
++   // from: or contact:
++   if (cid->cid_ani_url)
++      free(cid->cid_ani_url);
++   // to:
++   if (cid->cid_dnis_url)
++      free(cid->cid_dnis_url);
++   // request uri
++   if (cid->cid_req_uri)
++      free(cid->cid_req_uri);
++   // call id
++   if (cid->callid)
++      free(cid->callid);
++   // p asserted id
++   if (cid->cid_asserted_id)
++      free(cid->cid_asserted_id);
++   // Privacy
++   if (cid->cid_privacy)
++      free(cid->cid_privacy);
++}
++
+ struct ast_channel *ast_channel_release(struct ast_channel *chan)
+ {
+ 	/* Safe, even if already unlinked. */
+@@ -2392,6 +2414,8 @@
+ 	ast_party_connected_line_free(ast_channel_connected(chan));
+ 	ast_party_redirecting_free(ast_channel_redirecting(chan));
+ 
++	free_cid(ast_channel_cid(chan));
++
+ 	/* Close pipes if appropriate */
+ 	ast_channel_internal_alertpipe_close(chan);
+ 	if (ast_channel_timer(chan)) {
+@@ -5954,6 +5978,20 @@
+ 			return NULL;
+ 		}
+ 
++		char *str = (char *)addr;
++		int len = strlen(str);
++		str += len + 1;
++
++		if (strstr(str, "ActionID: "))
++		{
++		   manager_event(EVENT_FLAG_CALL, "OriginateChannel",
++		         "Channel: %s\r\n"
++		         "%s"
++		         "Uniqueid: %s\r\n",
++		         ast_channel_name(c), str,
++		         ast_channel_uniqueid(c));
++		}
++
+ 		/* Set newly created channel callid to same as the requestor */
+ 		if (requestor) {
+ 			struct ast_callid *callid = ast_channel_callid(requestor);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/main/channel_internal_api.c asterisk-11.3.0/main/channel_internal_api.c
+--- asterisk-11.3.0.p009/main/channel_internal_api.c	2013-05-21 16:26:04.032437705 +0100
++++ asterisk-11.3.0/main/channel_internal_api.c	2013-05-21 18:09:29.242950000 +0100
+@@ -715,6 +715,10 @@
+ {
+ 	chan->generatordata = value;
+ }
++struct ast_callerid *ast_channel_cid(struct ast_channel *chan)
++{
++   return &(chan->cid);
++}
+ const char *ast_channel_url_params(const struct ast_channel *chan)
+ {
+    return chan->url_params;
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/main/file.c asterisk-11.3.0/main/file.c
+--- asterisk-11.3.0.p009/main/file.c	2013-05-21 16:26:00.608437612 +0100
++++ asterisk-11.3.0/main/file.c	2013-05-21 17:54:11.063008000 +0100
+@@ -1156,6 +1156,8 @@
+ 			}
+ 		}
+ 
++		if (mode == 0666) fchmod(fd, 0666);
++
+ 		if (ast_opt_cache_record_files && (fd > -1)) {
+ 			char *c;
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p009/res/res_rtp_asterisk.c asterisk-11.3.0/res/res_rtp_asterisk.c
+--- asterisk-11.3.0.p009/res/res_rtp_asterisk.c	2013-05-21 16:26:00.212437354 +0100
++++ asterisk-11.3.0/res/res_rtp_asterisk.c	2013-05-21 17:55:11.183425000 +0100
+@@ -1740,7 +1740,7 @@
+ 
+ 		/* See if we ran out of ports or if the bind actually failed because of something other than the address being in use */
+ 		if (x == startplace || errno != EADDRINUSE) {
+-			ast_log(LOG_ERROR, "Oh dear... we couldn't allocate a port for RTP instance '%p'\n", instance);
++		   ast_log(LOG_ERROR, "Bind RTP address failed or couldn't allocate a port for RTP instance '%p'\n", instance);
+ 			close(rtp->s);
+ 			ast_free(rtp);
+ 			return -1;

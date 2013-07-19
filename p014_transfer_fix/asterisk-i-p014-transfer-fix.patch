@@ -1,0 +1,28 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p013/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-11.3.0.p013/apps/wms_inoapi.c	2013-05-23 15:41:24.992937787 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-05-23 15:53:46.581268000 +0100
+@@ -319,6 +319,9 @@
+ 	{
+ 		trs_reply.error = FALSE;
+ 		trs_reply.body.g_ret_value = pbx_exec(chan, app, trs_cmd.al_char_val2);
++
++		if (!strcasecmp(trs_cmd.al_char_val1, "transfer"))
++		   chan_vars->shutdown = 1;
+ 	}
+ 	else // application doesn't exist
+ 	{
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p013/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-11.3.0.p013/channels/chan_sip.c	2013-05-23 15:41:19.500437789 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-05-23 15:54:32.901351000 +0100
+@@ -25779,6 +25779,11 @@
+ 			success = FALSE;
+ 			break;
+ 		default:
++		   if (respcode == 100) {
++		      success = TRUE;
++		      break;
++		   }
++
+ 			if (respcode < 200) {
+ 				/* ignore provisional responses */
+ 				success = -1;

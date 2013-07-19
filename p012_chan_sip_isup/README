@@ -1,0 +1,70 @@
+Description:
+
+This patch adds ISUP support which allows exchange of ISUP messages within SIP and SIP-I messages.
+
+
+ 1. Get the source for Asterisk 11.3.0 from:
+ 
+ http://downloads.asterisk.org/pub/telephony/asterisk/old-releases/asterisk-11.3.0.tar.gz
+ 
+ 
+ 2. Untar the Asterisk 11.3.0
+ 
+ $ tar -zxvf asterisk-11.3.0.tar.gz
+ 
+ 
+ 3. Add the app WMS
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p000-app-wms.patch
+ 
+ 
+ 4. Add the codec AMR
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p002-codec-amr.patch
+  
+ 
+ 5. Add the SMRA support
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p004-smra-support.patch
+
+
+ 6. Add the feature reject mode
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p005-reject-mode.patch 
+ 
+ 
+ 7. Add the multiple IP support
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p006-udp-rtp-address-support.patch 
+
+
+ 8. Add the private extensions support
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p007-private-extension.patch 
+
+ 
+ 9. Add the dtmf flash support
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p008-dtmf-flash-support.patch 
+
+ 
+ 10. Add the extension tel support
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p009-tel-extension.patch 
+
+
+ 11. Add minor changes
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p010-minor-changes.patch  
+ 
+ 
+ 12. Add ISUP support
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p012-chan-sip-isup.patch  
+ 
+ 
+ 13. Build Asterisk
+ 
+ $ cd asterisk-11.3.0
+ $ ./configure
+ $ make

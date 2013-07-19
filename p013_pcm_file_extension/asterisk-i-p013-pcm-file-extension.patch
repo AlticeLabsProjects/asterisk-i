@@ -1,0 +1,21 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p012/formats/format_pcm.c asterisk-11.3.0/formats/format_pcm.c
+--- asterisk-11.3.0.p012/formats/format_pcm.c	2013-05-23 15:18:09.732443126 +0100
++++ asterisk-11.3.0/formats/format_pcm.c	2013-05-23 15:36:44.796564000 +0100
+@@ -464,7 +464,7 @@
+ 
+ static struct ast_format_def alaw_f = {
+ 	.name = "alaw",
+-	.exts = "alaw|al|alw",
++	.exts = "alaw|al|alw|pcm|vox",
+ 	.write = pcm_write,
+ 	.seek = pcm_seek,
+ 	.trunc = pcm_trunc,
+@@ -480,7 +480,7 @@
+ 
+ static struct ast_format_def pcm_f = {
+ 	.name = "pcm",
+-	.exts = "pcm|ulaw|ul|mu|ulw",
++	.exts = "ulaw|ul|mu|ulw",
+ 	.write = pcm_write,
+ 	.seek = pcm_seek,
+ 	.trunc = pcm_trunc,

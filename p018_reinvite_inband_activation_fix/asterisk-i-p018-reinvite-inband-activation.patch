@@ -1,0 +1,12 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-05-27 14:53:57.484437809 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-05-27 15:17:06.888937832 +0100
+@@ -10976,6 +10976,8 @@
+ 					ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_DTMF_COMPENSATE, ast_test_flag(&p->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
+ 				} else {
+ 					ast_set_flag(&p->flags[0], SIP_DTMF_INBAND);
++					if(p->dsp == NULL)
++					   enable_dsp_detect(p);
+ 				}
+ 			}
+ 		} else if (udptlportno > 0) {

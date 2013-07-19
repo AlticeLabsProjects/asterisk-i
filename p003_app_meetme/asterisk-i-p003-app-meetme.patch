@@ -1,0 +1,291 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p002/apps/app_dahdibarge.c asterisk-11.3.0/apps/app_dahdibarge.c
+--- asterisk-11.3.0.p002/apps/app_dahdibarge.c  2013-05-15 10:44:52.192437764 +0100
++++ asterisk-11.3.0/apps/app_dahdibarge.c  2013-05-22 13:41:15.976437835 +0100
+@@ -33,7 +33,7 @@
+
+ /*** MODULEINFO
+	<depend>dahdi</depend>
+-	<defaultenabled>no</defaultenabled>
++	<defaultenabled>yes</defaultenabled>
+	<support_level>deprecated</support_level>
+	<replacement>app_chanspy</replacement>
+  ***/
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p002/apps/app_meetme.c asterisk-11.3.0/apps/app_meetme.c
+--- asterisk-11.3.0.p002/apps/app_meetme.c	2013-05-15 10:44:52.220437841 +0100
++++ asterisk-11.3.0/apps/app_meetme.c	2013-05-15 11:53:17.400437329 +0100
+@@ -31,7 +31,7 @@
+
+ /*** MODULEINFO
+	<depend>dahdi</depend>
+-	<defaultenabled>no</defaultenabled>
++	<defaultenabled>yes</defaultenabled>
+	<support_level>extended</support_level>
+	<replacement>app_confbridge</replacement>
+  ***/
+@@ -579,6 +579,10 @@
+ 	MEETME_RECORD_TERMINATE
+ };
+ 
++#define MEETME_PLAY_OFF        0
++#define MEETME_PLAY_ACTIVE     1
++#define MEETME_PLAY_TERMINATE  2
++
+ #define CONF_SIZE  320
+ 
+ enum {
+@@ -769,6 +773,12 @@
+ 	struct ast_frame *origframe;
+ 	struct ast_trans_pvt *transpath[32];
+ 	struct ao2_container *usercontainer;
++
++	int playing;
++	char playfilename[128];            /* Filename to play in the Conference  */
++	pthread_t playthread;                   /* thread for playing */
++	struct ast_channel *playchan;           /* Announcements channel */
++
+ 	AST_LIST_ENTRY(ast_conference) list;
+ 	/* announce_thread related data */
+ 	pthread_t announcethread;
+@@ -1945,6 +1955,17 @@
+ 	***/
+ 	manager_event(EVENT_FLAG_CALL, "MeetmeEnd", "Meetme: %s\r\n", conf->confno);
+ 
++	if (conf->playing == MEETME_PLAY_ACTIVE) {
++	   conf->playing = MEETME_PLAY_TERMINATE;
++	   AST_LIST_UNLOCK(&confs);
++	   while (1) {
++	      AST_LIST_LOCK(&confs);
++	      if (conf->playing == MEETME_PLAY_OFF)
++	         break;
++	      AST_LIST_UNLOCK(&confs);
++	   }
++	}
++
+ 	if (conf->recording == MEETME_RECORD_ACTIVE) {
+ 		conf->recording = MEETME_RECORD_TERMINATE;
+ 		AST_LIST_UNLOCK(&confs);
+@@ -2117,6 +2138,87 @@
+ 	return res;
+ }
+ 
++static void *playthread(void *args)
++{
++   struct ast_conference *cnf = args;
++   char *playfile = cnf->playfilename;
++
++   if (!cnf || !cnf->chan || !cnf->playchan)
++   {
++      if (cnf->playchan) ast_channel_conf_playann_set(cnf->playchan, "-2");
++      if (cnf) cnf->playing = MEETME_PLAY_OFF;
++      pthread_exit(0);
++   }
++   ast_verbose(VERBOSE_PREFIX_4 "Starting to play announcement %s on conference %s.\n",
++         playfile, cnf->confno);
++
++   ast_stopstream(cnf->chan);
++   if (!ast_streamfile(cnf->chan, playfile, ast_channel_language(cnf->chan)))
++   {
++      //ast_waitstream(cnf->chan, "");
++      //Can't have ast_waitstream 'cause it blocks channel and has problems no ast_hangup
++      int res;
++      struct ast_frame *fr;
++
++      while(ast_channel_stream(cnf->chan))
++      {
++         //can't have ast_waitstream because of this particular code
++         if (cnf->playing == MEETME_PLAY_TERMINATE)
++         {
++            AST_LIST_LOCK(&confs);
++            AST_LIST_UNLOCK(&confs);
++            break;
++         }
++         res = ast_sched_wait(ast_channel_sched(cnf->chan));
++         if ((res < 0) && !ast_channel_timingfunc(cnf->chan))
++         {
++            ast_stopstream(cnf->chan);
++            break;
++         }
++         if (res < 0) res = 1000;
++         if ((res = ast_waitfor(cnf->chan, res)) < 0)
++         {
++            ast_log(LOG_WARNING, "Select failed (%s)\n", strerror(errno));
++            break;
++         }
++         else if (res > 0)
++         {
++            fr = ast_read(cnf->chan);
++            if (!fr) break;
++
++            switch(fr->frametype)
++            {
++               case AST_FRAME_DTMF:
++                  break;
++               case AST_FRAME_CONTROL:
++                  switch(fr->subclass.integer)
++                  {
++                     case AST_CONTROL_HANGUP:
++                        ast_frfree(fr);
++                        break;
++                     case AST_CONTROL_RINGING:
++                     case AST_CONTROL_ANSWER:
++                     case AST_CONTROL_VIDUPDATE:
++                        /* Unimportant */
++                        break;
++                     default:
++                        ast_log(LOG_WARNING, "Unexpected control subclass '%d'\n", fr->subclass.integer);
++                  }
++                     default: break;
++            }
++            /* Ignore */
++            ast_frfree(fr);
++         }
++         ast_sched_runq(ast_channel_sched(cnf->chan));
++      }
++      if (cnf->playchan) ast_channel_conf_playann_set(cnf->playchan, "-1");
++   }
++   else if (cnf->playchan) ast_channel_conf_playann_set(cnf->playchan, "-2");
++
++   cnf->playing = MEETME_PLAY_OFF;
++   pthread_exit(0);
++}
++
+ static int rt_extend_conf(const char *confno)
+ {
+ 	char currenttime[32];
+@@ -2944,6 +3046,27 @@
+ 			exitkeys = ast_strdupa("#"); /* Default */
+ 	}
+ 	
++	// Check if the application has requested us to record this conference
++	if (ast_test_flag(ast_channel_inoflags(chan), MEETME_DO_RECORD))
++	{
++	   if(!ast_test_flag64(confflags, CONFFLAG_RECORDCONF))
++	   {
++	      //We only need to do this once
++	      conf->recordingfilename = ast_strdup(ast_channel_conf_record(chan));
++	      if(!strcmp("pcm", ast_channel_conf_record_format(chan)))
++	         conf->recordingformat = ast_strdup("pcm");
++	      else if(!strcmp("al", ast_channel_conf_record_format(chan)))
++	         conf->recordingformat = ast_strdup("al");
++	      else if(!strcmp("ul",ast_channel_conf_record_format(chan)))
++	         conf->recordingformat = ast_strdup("ul");
++	      else
++	         conf->recordingformat = ast_strdup("wav");
++
++	      ast_set_flag64(confflags, CONFFLAG_RECORDCONF);
++	   }
++	   ast_clear_flag(ast_channel_inoflags(chan), MEETME_DO_RECORD);
++	}
++
+ 	if (ast_test_flag64(confflags, CONFFLAG_RECORDCONF)) {
+ 		if (!conf->recordingfilename) {
+ 			const char *var;
+@@ -3599,6 +3722,108 @@
+ 				}
+ 			}
+ 
++			// Kick user from conference
++			if (ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
++			{
++			   if (conf->playing == MEETME_PLAY_ACTIVE)
++			   {
++			      conf->playing = MEETME_PLAY_TERMINATE;
++			      ast_verbose(VERBOSE_PREFIX_3 "Stopping announcement on conference %s\n", conf->confno);
++			   }
++			   ret = 0;
++			   ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
++			   break;
++			}
++			// Play announcement to conference
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_DO_PLAY))
++			{
++			   if (conf->playing == MEETME_PLAY_OFF && (ast_channel_conf_playann(chan))[0] != '-')
++			   {
++			      sprintf(conf->playfilename, ast_channel_conf_playann(chan));
++			      conf->playing = MEETME_PLAY_ACTIVE;
++			      conf->playchan = chan;
++			      pthread_attr_init(&conf->attr);
++			      pthread_attr_setdetachstate(&conf->attr, PTHREAD_CREATE_DETACHED);
++			      ast_pthread_create(&conf->playthread, &conf->attr, playthread, conf);
++			   }
++			}
++			// Stop conference plays
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_STOP_PLAY))
++			{
++			   if (conf->playing == MEETME_PLAY_ACTIVE)
++			   {
++			      conf->playing = MEETME_PLAY_TERMINATE;
++			      ast_verbose(VERBOSE_PREFIX_3 "Stopping announcement on conference %s\n", conf->confno);
++			   }
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_STOP_PLAY);
++			}
++			//Mute a user
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_MUTE_USER))
++			{
++			   ast_verbose(VERBOSE_PREFIX_3 "Muting channel %s on conference %s\n", ast_channel_name(chan), conf->confno);
++			   if (user) user->adminflags |= ADMINFLAG_MUTED;
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_MUTE_USER);
++			}
++			// Unmute a user
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_UNMUTE_USER)) //CONF_MUTEALL
++			{
++			   ast_verbose(VERBOSE_PREFIX_3 "Unmuting channel %s on conference %s\n", ast_channel_name(chan), conf->confno);
++			   if (user) user->adminflags &= ~(ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED | ADMINFLAG_T_REQUEST);
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_UNMUTE_USER);
++			}
++			//Mute all user
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_MUTE_ALL))
++			{
++			   ast_verbose(VERBOSE_PREFIX_3 "Muting all users on conference %s\n", conf->confno);
++			   ao2_callback(conf->usercontainer, OBJ_NODATA, user_set_muted_cb, NULL);
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_MUTE_ALL);
++			}
++			//Unmute all user
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_UNMUTE_ALL)) //CONF_UNMUTEALL
++			{
++			   ast_verbose(VERBOSE_PREFIX_3 "Unmuting all users on conference %s\n", conf->confno);
++			   ao2_callback(conf->usercontainer, OBJ_NODATA, user_set_unmuted_cb, NULL);
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_UNMUTE_ALL);
++			}
++			// Lock conf
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_LOCK)) //
++			{
++			   ast_verbose(VERBOSE_PREFIX_3 "Locking conference %s\n", conf->confno);
++			   conf->locked = 1;
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_LOCK);
++			}
++			// Unlock conf
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_UNLOCK)) //
++			{
++			   ast_verbose(VERBOSE_PREFIX_3 "Unlocking conference %s\n", conf->confno);
++			   conf->locked = 0;
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_UNLOCK);
++			}
++			// Kick all users
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_KICK_USERS)) //
++			{
++			   ast_verbose(VERBOSE_PREFIX_3 "Kicking users from conference %s\n", conf->confno);
++			   ao2_callback(conf->usercontainer, OBJ_NODATA, user_set_kickme_cb, NULL);
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_KICK_USERS);
++			}
++			// Kick last user
++			if (ast_test_flag(ast_channel_inoflags(chan), MEETME_KICK_LAST)) //
++			{
++			   int max_no = 0;
++
++			   ast_verbose(VERBOSE_PREFIX_3 "Kicking last user from conference %s\n", conf->confno);
++			   ao2_callback(conf->usercontainer, OBJ_NODATA, user_max_cmp, &max_no);
++			   user = ao2_find(conf->usercontainer, &max_no, 0);
++			   if (!ast_test_flag64(&user->userflags, CONFFLAG_ADMIN))
++			      user->adminflags |= ADMINFLAG_KICKME;
++			   else {
++			      res = -1;
++			      ast_log(LOG_NOTICE, "Not kicking last user, is an Admin!\n");
++			   }
++			   ao2_ref(user, -1);
++			   ast_clear_flag(ast_channel_inoflags(chan), MEETME_KICK_LAST);
++			}
++
+ 			/* Update the struct with the actual confflags */
+ 			user->userflags = *confflags;
+ 

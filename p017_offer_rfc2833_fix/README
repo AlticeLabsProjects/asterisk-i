@@ -1,0 +1,35 @@
+Description:
+
+SDP in answer to an INVITE without SDP should list RFC2833 DTMF capability
+
+
+ 1. Get the source for Asterisk 11.3.0 from:
+ 
+ http://downloads.asterisk.org/pub/telephony/asterisk/old-releases/asterisk-11.3.0.tar.gz
+ 
+ 
+ 2. Untar the Asterisk 11.3.0
+ 
+ $ tar -zxvf asterisk-11.3.0.tar.gz
+  
+ 3. Add the app WMS
+ 
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p000-app-wms.patch
+
+ 4. Add the DTMF-Passthrough support
+
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p015-dtmf-passthrough.patch
+
+ 5. Add the Conference Creation fix patch
+
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p016-conference-creation-fix.patch
+
+ 6. Add the Offer rfc2833 fix
+
+ $ patch -p1 -d asterisk-11.3.0/ < asterisk-i-p017-offer-rfc2833-fix.patch
+ 
+ 7. Build Asterisk
+ 
+ $ cd asterisk-11.3.0
+ $ ./configure
+ $ make

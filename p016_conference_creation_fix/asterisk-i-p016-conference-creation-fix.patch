@@ -1,0 +1,71 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p015/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-11.3.0.p015/apps/app_wms.c	2013-05-23 16:54:34.000687768 +0100
++++ asterisk-11.3.0/apps/app_wms.c	2013-05-23 16:59:05.373958000 +0100
+@@ -586,6 +586,7 @@
+ 
+    tempcs[0] = chan;
+    numcs = 1;
++   chan_vars->chan = chan;
+ 
+ //- MAIN LOOP ------------------------------------------------------------------------
+ 	while (!chan_vars->shutdown)
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p015/apps/app_wms.h asterisk-11.3.0/apps/app_wms.h
+--- asterisk-11.3.0.p015/apps/app_wms.h	2013-05-23 16:54:34.004687878 +0100
++++ asterisk-11.3.0/apps/app_wms.h	2013-05-23 16:59:43.939779000 +0100
+@@ -81,6 +81,7 @@
+       int exit;
+    } conference;
+    pthread_t conf_thread;
++   struct ast_channel *chan;
+    struct
+    {
+       int enabled;
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p015/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-11.3.0.p015/apps/wms_inoapi.c	2013-05-23 16:54:34.012688136 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-05-23 17:01:53.435512000 +0100
+@@ -58,7 +58,7 @@
+  * VARIABLES
+  *
+  ******************************************************************************/
+-struct conf_struct
++typedef struct conf_struct
+ {
+    struct ast_channel *chan;
+    ast_vars *chan_vars;
+@@ -489,9 +489,7 @@
+       {
+          //unsigned long stack_size = 240 * 1024;
+ 
+-         conf_data.chan = chan;
+-         conf_data.chan_vars = chan_vars;
+-	      chan_vars->conference.cmd_cnt = trs_cmd.cmd_cnt;
++         chan_vars->conference.cmd_cnt = trs_cmd.cmd_cnt;
+ 	      chan_vars->conference.con_id = trs_cmd.con_id;
+ 	      chan_vars->conference.edp_id = trs_cmd.edp_id;
+          ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
+@@ -615,7 +613,7 @@
+             ast_log(LOG_WARNING, "Thread in use! Ignoring conference %d on ch %03d - %s\n", trs_cmd.al_int_val2, trs_cmd.ch_index, ast_channel_name(chan));
+             goto error;
+          }
+-         if (ast_pthread_create_background(&chan_vars->conf_thread, NULL, conference_thread, NULL) < 0)
++         if (ast_pthread_create_background(&chan_vars->conf_thread, NULL, conference_thread, chan_vars) < 0)
+          {
+             memset(&chan_vars->conference, 0, sizeof(chan_vars->conference));
+             ast_log(LOG_WARNING, "Thread creation ERROR |%s| for conference %d on ch %03d - %s\n", strerror(errno), trs_cmd.al_int_val2, trs_cmd.ch_index, ast_channel_name(chan));
+@@ -756,11 +754,14 @@
+ static void *conference_thread(void *data)
+ {
+ 	struct ast_app *app; // AGI RELATED
+-   struct ast_channel *chan = conf_data.chan;
+-   ast_vars *chan_vars = conf_data.chan_vars;
++	struct ast_channel *chan;
++	ast_vars *chan_vars;
+    char execCmd[15];
+ 	reply_ast trs_reply;
+ 
++	chan_vars = (ast_vars *) data;
++	chan = chan_vars->chan;
++
+    memset(&trs_reply, 0, sizeof(trs_reply));
+    trs_reply.cmd_cnt = chan_vars->conference.cmd_cnt;
+ 	trs_reply.con_id = chan_vars->conference.con_id;

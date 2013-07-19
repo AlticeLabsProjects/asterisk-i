@@ -1,0 +1,21 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-11.3.0.p016/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-11.3.0.p016/channels/chan_sip.c	2013-05-23 17:11:49.224687980 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-05-23 17:14:20.704344000 +0100
+@@ -26523,6 +26523,8 @@
+ 				ast_queue_control(p->owner, AST_CONTROL_SRCUPDATE);
+ 			} else {
+ 				ast_format_cap_copy(p->jointcaps, p->caps);
++				/* If other party has no SDP, then it could have the same noncodeccapability */
++				p->jointnoncodeccapability = p->noncodeccapability;
+ 				ast_debug(1, "Hm....  No sdp for the moment\n");
+ 				/* Some devices signal they want to be put off hold by sending a re-invite
+ 				   *without* an SDP, which is supposed to mean "Go back to your state"
+@@ -26588,6 +26590,8 @@
+ 			}
+ 		} else {	/* No SDP in invite, call control session */
+ 			ast_format_cap_copy(p->jointcaps, p->caps);
++			/* If other party has no SDP, then it could have the same noncodeccapability */
++			p->jointnoncodeccapability = p->noncodeccapability;
+ 			ast_debug(2, "No SDP in Invite, third party call control\n");
+ 		}
+ 
