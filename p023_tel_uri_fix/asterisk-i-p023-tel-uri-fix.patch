@@ -1,0 +1,96 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-09-05 10:21:02.387887231 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-09-05 11:21:21.643637187 +0100
+@@ -16103,7 +16103,7 @@
+ 
+ 	ast_copy_string(from, sip_get_header(&p->initreq, "From"), sizeof(from));
+ 	c = get_in_brackets(from);
+-	if (strncasecmp(c, "sip:", 4) && strncasecmp(c, "sips:", 5)) {
++	if (strncasecmp(c, "sip:", 4) && strncasecmp(c, "sips:", 5) && strncasecmp(c, "tel:", 4)) {
+ 		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
+ 		return -1;
+ 	}
+@@ -16112,7 +16112,7 @@
+ 
+ 	ast_copy_string(to, sip_get_header(&p->initreq, "To"), sizeof(to));
+ 	c = get_in_brackets(to);
+-	if (strncasecmp(c, "sip:", 4) && strncasecmp(c, "sips:", 5)) {
++	if (strncasecmp(c, "sip:", 4) && strncasecmp(c, "sips:", 5) && strncasecmp(c, "tel:", 4)) {
+ 		ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", c);
+ 		return -1;
+ 	}
+@@ -19173,7 +19173,7 @@
+ 	ast_copy_string(tmpf, sip_get_header(req, "From"), sizeof(tmpf));
+ 	if (!ast_strlen_zero(tmpf)) {
+ 		from = get_in_brackets(tmpf);
+-		if (parse_uri_legacy_check(from, "sip:,sips:", &from, NULL, &domain, NULL)) {
++		if (parse_uri_legacy_check(from, "sip:,sips:,tel:", &from, NULL, &domain, NULL)) {
+ 			ast_log(LOG_WARNING, "Not a SIP header (%s)?\n", from);
+ 			return SIP_GET_DEST_INVALID_URI;
+ 		}
+@@ -28768,7 +28768,7 @@
+ 
+ 	to_uri = ast_strdupa(to);
+ 	to_uri = get_in_brackets(to_uri);
+-	parse_uri(to_uri, "sip:,sips:", &to_user, NULL, &to_host, NULL);
++	parse_uri(to_uri, "sip:,sips:,tel:", &to_user, NULL, &to_host, NULL);
+ 
+ 	if (ast_strlen_zero(to_host)) {
+ 		ast_log(LOG_WARNING, "MESSAGE(to) is invalid for SIP - '%s'\n", to);
+@@ -28790,7 +28790,7 @@
+ 			ast_callerid_parse(sender, &name, &location);
+ 			ast_string_field_set(pvt, fromname, name);
+ 			if (strchr(location, ':')) { /* Must be a URI */
+-				parse_uri(location, "sip:,sips:", &user, NULL, &domain, NULL);
++				parse_uri(location, "sip:,sips:,tel:", &user, NULL, &domain, NULL);
+ 				SIP_PEDANTIC_DECODE(user);
+ 				SIP_PEDANTIC_DECODE(domain);
+ 				extract_host_from_hostport(&domain);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/sip/reqresp_parser.c asterisk-11.3.0/channels/sip/reqresp_parser.c
+--- asterisk-base-11.3.0/channels/sip/reqresp_parser.c	2013-09-05 10:21:02.215637309 +0100
++++ asterisk-11.3.0/channels/sip/reqresp_parser.c	2013-09-05 18:07:07.819637222 +0100
+@@ -45,6 +45,7 @@
+ 	char *endparams = NULL;
+ 	char *c = NULL;
+ 	int error = 0;
++	int tel_uri = 0;
+ 
+ 	/*
+ 	 * Initialize requested strings - some functions don't care if parse_uri fails
+@@ -79,6 +80,7 @@
+ 		for (; !ast_strlen_zero(cur); cur = strsep(&scheme2, ",")) {
+ 			l = strlen(cur);
+ 			if (!strncasecmp(uri, cur, l)) {
++				if (!strcmp(cur, "tel:")) tel_uri = 1;
+ 				uri += l;
+ 				break;
+ 			}
+@@ -106,6 +108,10 @@
+ 		   dom = c + 15;
+ 		   userinfo = uri;
+ 		   uri = dom;
++		}
++		else if ( tel_uri ) { /* TEL URI INVITE */
++		   dom = uri;
++		   userinfo = uri;
+ 		} else {
+ 		   /* domain-only URI, according to the SIP RFC. */
+ 		   dom = uri;
+@@ -832,7 +838,7 @@
+ 	tmp_number = get_in_brackets(header);
+ 
+ 	/* parse out the number here */
+-	if (parse_uri(tmp_number, "sip:,sips:", &tmp_number, &dummy, &hostport, NULL) || ast_strlen_zero(tmp_number)) {
++	if (parse_uri(tmp_number, "sip:,sips:,tel:", &tmp_number, &dummy, &hostport, NULL) || ast_strlen_zero(tmp_number)) {
+ 		ast_log(LOG_ERROR, "can not parse name and number from sip header.\n");
+ 		return -1;
+ 	}
+@@ -1392,7 +1398,7 @@
+ 
+ 	AST_LIST_HEAD_SET_NOLOCK(contactlist, split_contact);
+ 	while ((last = get_comma(contactheader, &comma)) != -1) {
+-		res = parse_name_andor_addr(contactheader, "sip:,sips:",
++		res = parse_name_andor_addr(contactheader, "sip:,sips:,tel:",
+ 			&split_contact->name, &split_contact->user,
+ 			&split_contact->pass, &split_contact->hostport,
+ 			&split_contact->params, &split_contact->headers,
