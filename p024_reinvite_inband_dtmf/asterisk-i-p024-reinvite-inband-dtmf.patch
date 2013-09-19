@@ -1,0 +1,12 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-09-18 17:07:32.020387256 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2013-09-18 17:13:21.963637588 +0100
+@@ -11014,7 +11014,7 @@
+ 				ast_channel_set_fd(p->owner, 1, ast_rtp_instance_fd(p->rtp, 1));
+ 			}
+ 
+-			if (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO) {
++			if (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO || ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833 || ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_INBAND) {
+ 				ast_clear_flag(&p->flags[0], SIP_DTMF);
+ 				if (newnoncodeccapability & AST_RTP_DTMF) {
+ 					/* XXX Would it be reasonable to drop the DSP at this point? XXX */
