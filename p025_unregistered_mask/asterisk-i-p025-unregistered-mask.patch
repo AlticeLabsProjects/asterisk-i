@@ -1,0 +1,14 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2013-10-08 09:33:51.043637176 +0100
++++ asterisk-11.3.0/main/channel.c	2013-10-08 09:42:25.668150981 +0100
+@@ -1241,6 +1241,10 @@
+ 	unsigned int queued_voice_frames = 0;
+ 	AST_LIST_HEAD_NOLOCK(,ast_frame) frames;
+ 
++        if (chan == NULL) {
++               return -1;
++        }   
++
+ 	ast_channel_lock(chan);
+ 
+ 	/*
