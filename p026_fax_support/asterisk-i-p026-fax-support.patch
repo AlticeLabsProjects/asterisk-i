@@ -171,7 +171,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637210 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-10-29 17:10:57.069769000 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-10-30 15:38:38.889551000 +0000
 @@ -1409,8 +1409,338 @@
  }
  
@@ -230,12 +230,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   // ->$CSID->$HEADER->$FAX_FILE->$FAX_COVER->#HEADER_TYPE->#MAX_BAUD->
 +   if ((app = pbx_findapp("SendFAX"))) // application found// AGI RELATED
 +   {
-+      if (option_verbose >= 3)
-+         ast_verbose(VERBOSE_PREFIX_3 "SendFAX |%s| on channel %s\n", execCmd, ast_channel_name(chan));
-+
 +      if(trs_cmd.fax_param.fax_file)
 +      {
 +         snprintf(execCmd, sizeof(execCmd), "%s,dfzs", trs_cmd.fax_param.fax_file);
++
++         if (option_verbose >= 3)
++            ast_verbose(VERBOSE_PREFIX_3 "SendFAX |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
 +
 +         if(trs_cmd.fax_param.csid)
 +         {
@@ -398,12 +398,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   // ->$FAX_FILE->$CSID->#MAX_BAUD->
 +   if ((app = pbx_findapp("ReceiveFAX"))) // application found// AGI RELATED
 +   {
-+      if (option_verbose >= 3)
-+         ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax |%s| on channel %s\n", execCmd, ast_channel_name(chan));
-+
 +      if(trs_cmd.fax_param.fax_file)
 +      {
 +         snprintf(execCmd, sizeof(execCmd), "%s,dfzs", trs_cmd.fax_param.fax_file);
++
++         if (option_verbose >= 3)
++            ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
 +
 +         if(trs_cmd.fax_param.csid)
 +         {
