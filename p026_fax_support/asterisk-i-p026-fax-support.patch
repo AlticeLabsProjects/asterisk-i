@@ -171,8 +171,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637210 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-10-29 17:10:57.069769000 +0000
-@@ -1409,8 +1409,338 @@
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-10-30 16:55:24.754262000 +0000
+@@ -1409,8 +1409,352 @@
  }
  
  
@@ -191,6 +191,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   int s_error = 0;
 +   const char *s_tmp;
 +   int s_result = 0;
++   time_t s_timeout;
  
 +   if (option_verbose >= 4)
 +       ast_verbose(VERBOSE_PREFIX_4 "send_fax: Fax call operation %d on channel %s\n", trs_cmd.al_int_val1, ast_channel_name(chan));
@@ -230,12 +231,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   // ->$CSID->$HEADER->$FAX_FILE->$FAX_COVER->#HEADER_TYPE->#MAX_BAUD->
 +   if ((app = pbx_findapp("SendFAX"))) // application found// AGI RELATED
 +   {
-+      if (option_verbose >= 3)
-+         ast_verbose(VERBOSE_PREFIX_3 "SendFAX |%s| on channel %s\n", execCmd, ast_channel_name(chan));
-+
 +      if(trs_cmd.fax_param.fax_file)
 +      {
 +         snprintf(execCmd, sizeof(execCmd), "%s,dfzs", trs_cmd.fax_param.fax_file);
++
++         if (option_verbose >= 3)
++            ast_verbose(VERBOSE_PREFIX_3 "SendFAX |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
 +
 +         if(trs_cmd.fax_param.csid)
 +         {
@@ -282,6 +283,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         }
 +         else
 +         { // wait for phase E callback to return
++
++            s_timeout = ast_tvnow().tv_sec + 30; // wait 30 seconds before timeout
++
 +            while(1)
 +            {
 +               if (ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
@@ -326,6 +330,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                  break;
 +               }
 +
++               if (s_timeout < ast_tvnow().tv_sec)
++                  break;
++
 +               usleep(100000);
 +            }
 +         }
@@ -362,6 +369,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   int s_error = 0;
 +   const char *s_tmp;
 +   int s_result = 0;
++   time_t s_timeout;
 +
 +   if (chan == NULL)
 +   {
@@ -398,12 +406,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   // ->$FAX_FILE->$CSID->#MAX_BAUD->
 +   if ((app = pbx_findapp("ReceiveFAX"))) // application found// AGI RELATED
 +   {
-+      if (option_verbose >= 3)
-+         ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax |%s| on channel %s\n", execCmd, ast_channel_name(chan));
-+
 +      if(trs_cmd.fax_param.fax_file)
 +      {
 +         snprintf(execCmd, sizeof(execCmd), "%s,dfzs", trs_cmd.fax_param.fax_file);
++
++         if (option_verbose >= 3)
++            ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
 +
 +         if(trs_cmd.fax_param.csid)
 +         {
@@ -448,6 +456,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         }
 +         else
 +         { // wait for phase E callback to return
++
++            s_timeout = ast_tvnow().tv_sec + 30; // wait 30 seconds before timeout
++
 +            while(1)
 +            {
 +               if (ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
@@ -489,6 +500,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                  ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
 +                  break;
 +               }
++
++               if (s_timeout < ast_tvnow().tv_sec)
++                  break;
 +
 +               usleep(100000);
 +            }
