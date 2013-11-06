@@ -171,8 +171,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637210 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-05 11:40:07.249885000 +0000
-@@ -1409,8 +1409,360 @@
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-06 10:44:27.091636756 +0000
+@@ -1409,8 +1409,364 @@
  }
  
  
@@ -426,17 +426,21 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         if (trs_cmd.fax_param.max_baudrate)
 +         {
 +            sprintf(s_maxbaudrate, "%d",trs_cmd.fax_param.max_baudrate);
++
++            if (option_verbose >= 3)
++                    ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax maxbaudrate: %s on channel %s\n", s_maxbaudrate, ast_channel_name(chan));
++
 +            ast_func_write(chan, "FAXOPT(maxrate)", (const char *)s_maxbaudrate);
 +         }
 +
 +         s_result = pbx_exec(chan, app, execCmd);
 +
 +         if (option_verbose >= 3)
-+            ast_verbose(VERBOSE_PREFIX_3 "send_fax: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
++            ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
 +
 +         if(s_result == -1)
 +         {
-+            ast_log(LOG_ERROR, "send_fax: pbx_exec result: %d\n",s_result);
++            ast_log(LOG_ERROR, "ReceiveFax: pbx_exec result: %d\n",s_result);
 +
 +            ast_channel_lock(chan);
 +            if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERROR")))
