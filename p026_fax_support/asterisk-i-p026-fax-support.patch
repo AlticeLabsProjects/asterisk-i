@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
 --- asterisk-base-11.3.0/apps/app_wms.c	2013-10-28 10:11:56.063637132 +0000
-+++ asterisk-11.3.0/apps/app_wms.c	2013-10-28 10:17:14.315892725 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2013-10-28 10:17:14.315892000 +0000
 @@ -583,6 +583,7 @@
     struct ast_frame *f;
     cmd_ast trs_cmd;
@@ -70,8 +70,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
              if (option_verbose >= 3)
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
 --- asterisk-base-11.3.0/apps/vsrvdefs.h	2013-10-28 10:11:56.067637202 +0000
-+++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-04 11:00:36.158180000 +0000
-@@ -56,6 +56,16 @@
++++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-06 11:59:40.439857000 +0000
+@@ -56,6 +56,18 @@
  /* Conference_event */
  #define USER_EXITED_CONFERENCE   0
  
@@ -85,10 +85,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +#define  FAX_HEADER_LONG      1
 +#define  FAX_ERROR_MASK       0xD00 // Fax mask from SV_ERROR_MASK (see InoVox definition)
 +
++#define  FAX_FORMAT_TIFF      0 // fax storage format
++
  /* Digit Streaming Definitions */
  #define STREAM_IGNORE      -1
  #define STREAM_STOP        0
-@@ -229,6 +239,29 @@
+@@ -229,6 +241,29 @@
     char trans_rec_fname[256];
  } ROUEND_PARAM;
  
@@ -118,7 +120,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  /* Termination conditions */
  typedef struct
  {
-@@ -497,6 +530,7 @@
+@@ -497,6 +532,7 @@
     char use_smra;
     SMRA_ATTRIB       smra_attrib;      // SMRA Attributes
     sdp_media sdp;
@@ -126,7 +128,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  } cmd_ast;
  
  
-@@ -526,6 +560,7 @@
+@@ -526,6 +562,7 @@
        char              channelId[32];
        SMRA_ATTRIB       smra_attrib;      // SMRA Attributes
        sdp_media sdp;
@@ -171,7 +173,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637210 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-06 10:44:27.091636756 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-06 11:59:36.767778000 +0000
 @@ -1409,8 +1409,364 @@
  }
  
@@ -223,7 +225,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +
 +   trs_reply.body.fax_reply.event = SEND_FAX_COMPLETED;      // event returned
 +   trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
-+   trs_reply.body.fax_reply.format = 1;     // fax storage format
++   trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
 +
 +
 +   ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
@@ -403,7 +405,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +
 +   trs_reply.body.fax_reply.event = RECEIVE_FAX_COMPLETED;      // event returned
 +   trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;       // channel ID
-+   trs_reply.body.fax_reply.format = 1;     // fax storage format
++   trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
 +
 +
 +   ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
@@ -539,7 +541,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.h asterisk-11.3.0/apps/wms_inoapi.h
 --- asterisk-base-11.3.0/apps/wms_inoapi.h	2013-10-28 10:11:56.043637237 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.h	2013-10-28 10:17:14.327887238 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.h	2013-10-28 10:17:14.327887000 +0000
 @@ -33,6 +33,8 @@
  void route_endpoint(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
  void stop_operation(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
@@ -622,7 +624,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	}
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
 --- asterisk-base-11.3.0/include/asterisk/channel.h	2013-10-28 10:11:52.271637251 +0000
-+++ asterisk-11.3.0/include/asterisk/channel.h	2013-10-28 10:17:14.383887327 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2013-10-28 10:17:14.383887000 +0000
 @@ -186,6 +186,8 @@
  #define MEETME_KICK_LAST      (1 << 12)
  #define MEETME_DO_RECORD      (1 << 13)
@@ -634,7 +636,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/res_fax.h asterisk-11.3.0/include/asterisk/res_fax.h
 --- asterisk-base-11.3.0/include/asterisk/res_fax.h	2013-10-28 10:11:52.127637179 +0000
-+++ asterisk-11.3.0/include/asterisk/res_fax.h	2013-10-28 10:17:14.387887853 +0000
++++ asterisk-11.3.0/include/asterisk/res_fax.h	2013-10-28 10:17:14.387887000 +0000
 @@ -141,6 +141,8 @@
  	);
  	/*! the number of pages sent/received during a fax session */
