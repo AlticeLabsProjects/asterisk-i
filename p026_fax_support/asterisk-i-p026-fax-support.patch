@@ -70,7 +70,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
              if (option_verbose >= 3)
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
 --- asterisk-base-11.3.0/apps/vsrvdefs.h	2013-10-28 10:11:56.067637202 +0000
-+++ asterisk-11.3.0/apps/vsrvdefs.h	2013-10-29 17:04:27.215260000 +0000
++++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-04 11:00:36.158180000 +0000
 @@ -56,6 +56,16 @@
  /* Conference_event */
  #define USER_EXITED_CONFERENCE   0
@@ -98,7 +98,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   short source_type;                     // fax file type (0 - single file / 1 - list of files)
 +   char  fn_cover[FAX_COVERFNAME_SIZE];   // cover filename to send
 +   char  csid[FAX_CSID_STR_SIZE];         // Customer Subscriber Identification
-+   char  header[FAX_HEADER_STR_SIZE];     // fax header to send
++   char  header[FAX_HEADER_STR_SIZE+1];   // fax header to send
 +   short header_type;                     // type of header to send (FAX_HEADER_SHORT or FAX_HEADER_LONG)
 +   unsigned short max_baudrate;           // maximum transmission baud rate (2400 to 14400)
 +}FAX_RES_PARAM;
@@ -171,8 +171,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637210 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-10-30 16:55:24.754262000 +0000
-@@ -1409,8 +1409,352 @@
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-05 11:40:07.249885000 +0000
+@@ -1409,8 +1409,360 @@
  }
  
  
@@ -349,7 +349,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +      trs_reply.body.error_value = RESOURCE_ERROR;
 +   }
 +
-+   //send event
++   // Clear FAX_TONE_DETECTED flag in case it was activated
++   ast_channel_lock(chan);
++   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_DETECTED);
++   ast_channel_unlock(chan);
++
++   // send event
 +   asteriskSendReply(&trs_reply, chan_vars);
 +}
 +
@@ -425,8 +430,6 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         }
 +
 +         s_result = pbx_exec(chan, app, execCmd);
-+
-+         ast_log(LOG_ERROR, "receive_fax: pbx_exec result: %d\n",s_result);
 +
 +         if (option_verbose >= 3)
 +            ast_verbose(VERBOSE_PREFIX_3 "send_fax: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
@@ -520,7 +523,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +      trs_reply.body.error_value = RESOURCE_ERROR;
 +   }
 +
-+   //send event
++   // Clear FAX_TONE_DETECTED flag in case it was activated
++   ast_channel_lock(chan);
++   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_DETECTED);
++   ast_channel_unlock(chan);
++
++   // send event
 +   asteriskSendReply(&trs_reply, chan_vars);
 +
 +}
@@ -539,7 +547,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  void kill_conference_thread(ast_vars *chan_vars);
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
 --- asterisk-base-11.3.0/channels/chan_sip.c	2013-10-28 10:11:50.967887486 +0000
-+++ asterisk-11.3.0/channels/chan_sip.c	2013-10-29 12:32:31.385223000 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2013-11-05 11:13:26.170319000 +0000
 @@ -6558,7 +6558,7 @@
  	/* T.38 re-INVITE FAX detection should never be done for outgoing calls,
  	 * so ensure it is disabled.
@@ -574,7 +582,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		}
  	}
  
-@@ -11117,18 +11103,11 @@
+@@ -11117,19 +11103,12 @@
  				if (ast_test_flag(&p->flags[1], SIP_PAGE2_FAX_DETECT_T38)) {
  					ast_channel_lock(p->owner);
  					if (strcmp(ast_channel_exten(p->owner), "fax")) {
@@ -590,14 +598,16 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 -						} else {
 -							ast_log(LOG_NOTICE, "T.38 re-INVITE detected but no fax extension\n");
 -						}
+-					} else {
 +					   ast_verb(2, "Fax T.38 detection on channel '%s'\n", ast_channel_name(p->owner));
 +
 +					   ast_set_flag(ast_channel_inoflags(p->owner), FAX_TONE_DETECTED);
 +					   ast_channel_unlock(p->owner);
 +
- 					} else {
++				   } else {
  						ast_channel_unlock(p->owner);
  					}
+ 				}
 @@ -11143,7 +11122,6 @@
  	}
  
@@ -632,28 +642,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		/*! dontuse dummy variable - do not ever use */	
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
 --- asterisk-base-11.3.0/res/res_fax.c	2013-10-28 10:12:18.935637193 +0000
-+++ asterisk-11.3.0/res/res_fax.c	2013-10-30 11:31:56.589875000 +0000
-@@ -1084,9 +1084,17 @@
- 
- static void get_manager_event_info(struct ast_channel *chan, struct manager_event_info *info)
- {
--	pbx_substitute_variables_helper(chan, "${CONTEXT}", info->context, sizeof(info->context));
-+   const char *s_csid;
-+   ast_channel_lock(chan);
-+   if ((s_csid = pbx_builtin_getvar_helper(chan, "FAXCSID")))
-+   {
-+      s_csid = ast_strdupa(s_csid);
-+      pbx_substitute_variables_helper(chan, s_csid, info->cid, sizeof(info->cid));
-+   }
-+
-+   pbx_substitute_variables_helper(chan, "${CONTEXT}", info->context, sizeof(info->context));
- 	pbx_substitute_variables_helper(chan, "${EXTEN}", info->exten, sizeof(info->exten));
--	pbx_substitute_variables_helper(chan, "${CALLERID(num)}", info->cid, sizeof(info->cid));
-+	ast_channel_unlock(chan);
- }
- 
- 
-@@ -1141,13 +1149,19 @@
++++ asterisk-11.3.0/res/res_fax.c	2013-11-06 09:43:53.873959000 +0000
+@@ -1141,31 +1141,34 @@
  static int report_fax_status(struct ast_channel *chan, struct ast_fax_session_details *details, const char *status)
  {
  	char *filenames = generate_filenames_string(details, "FileName: ", "\r\n");
@@ -676,9 +666,10 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  			      "FAXStatus",
  			      "Operation: %s\r\n"
  			      "Status: %s\r\n"
-@@ -1156,7 +1170,8 @@
- 			      "Exten: %s\r\n"
- 			      "CallerID: %s\r\n"
+ 			      "Channel: %s\r\n"
+-			      "Context: %s\r\n"
+-			      "Exten: %s\r\n"
+-			      "CallerID: %s\r\n"
  			      "LocalStationID: %s\r\n"
 -			      "%s%s",
 +			      "%s%s"
@@ -686,8 +677,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  			      (details->caps & AST_FAX_TECH_GATEWAY) ? "gateway" : (details->caps & AST_FAX_TECH_RECEIVE) ? "receive" : "send",
  			      status,
  			      ast_channel_name(chan),
-@@ -1165,7 +1180,9 @@
- 			      info.cid,
+-			      info.context,
+-			      info.exten,
+-			      info.cid,
  			      details->localstationid,
  			      S_OR(filenames, ""),
 -			      filenames ? "\r\n" : "");
@@ -697,7 +689,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	}
  	ast_channel_unlock(chan);
  
-@@ -1745,6 +1762,7 @@
+@@ -1745,6 +1748,7 @@
  	struct ast_flags opts = { 0, };
  	struct manager_event_info info;
  	enum ast_t38_state t38state;
@@ -705,7 +697,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	/* initialize output channel variables */
  	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
-@@ -1768,7 +1786,7 @@
+@@ -1768,7 +1772,7 @@
  	set_channel_variables(chan, details);
  
  	if (details->gateway_id > 0) {
@@ -714,7 +706,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		set_channel_variables(chan, details);
  		ast_log(LOG_ERROR, "executing ReceiveFAX on a channel with a T.38 Gateway is not supported\n");
  		ao2_ref(details, -1);
-@@ -1942,8 +1960,14 @@
+@@ -1942,29 +1946,32 @@
  	/* send out the AMI completion event */
  	ast_channel_lock(chan);
  
@@ -729,8 +721,11 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +	   manager_event(EVENT_FLAG_CALL,
  		      "ReceiveFAX",
  		      "Channel: %s\r\n"
- 		      "Context: %s\r\n"
-@@ -1954,7 +1978,8 @@
+-		      "Context: %s\r\n"
+-		      "Exten: %s\r\n"
+-		      "CallerID: %s\r\n"
+ 		      "RemoteStationID: %s\r\n"
+ 		      "LocalStationID: %s\r\n"
  		      "PagesTransferred: %s\r\n"
  		      "Resolution: %s\r\n"
  		      "TransferRate: %s\r\n"
@@ -738,9 +733,11 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +		      "%s\r\n"
 +		      "chid: %s\r\n",
  		      ast_channel_name(chan),
- 		      info.context,
- 		      info.exten,
-@@ -1964,7 +1989,9 @@
+-		      info.context,
+-		      info.exten,
+-		      info.cid,
+ 		      S_OR(pbx_builtin_getvar_helper(chan, "REMOTESTATIONID"), ""),
+ 		      S_OR(pbx_builtin_getvar_helper(chan, "LOCALSTATIONID"), ""),
  		      S_OR(pbx_builtin_getvar_helper(chan, "FAXPAGES"), ""),
  		      S_OR(pbx_builtin_getvar_helper(chan, "FAXRESOLUTION"), ""),
  		      S_OR(pbx_builtin_getvar_helper(chan, "FAXBITRATE"), ""),
@@ -751,7 +748,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	ast_channel_unlock(chan);
  
  	ao2_ref(s, -1);
-@@ -2231,6 +2258,7 @@
+@@ -2231,6 +2238,7 @@
  	struct ast_flags opts = { 0, };
  	struct manager_event_info info;
  	enum ast_t38_state t38state;
@@ -759,7 +756,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	/* initialize output channel variables */
  	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
-@@ -2458,8 +2486,15 @@
+@@ -2458,29 +2466,33 @@
  
  	/* send out the AMI completion event */
  	ast_channel_lock(chan);
@@ -775,8 +772,11 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +	   manager_event(EVENT_FLAG_CALL,
  		      "SendFAX",
  		      "Channel: %s\r\n"
- 		      "Context: %s\r\n"
-@@ -2470,7 +2505,8 @@
+-		      "Context: %s\r\n"
+-		      "Exten: %s\r\n"
+-		      "CallerID: %s\r\n"
+ 		      "RemoteStationID: %s\r\n"
+ 		      "LocalStationID: %s\r\n"
  		      "PagesTransferred: %s\r\n"
  		      "Resolution: %s\r\n"
  		      "TransferRate: %s\r\n"
@@ -784,9 +784,11 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +		      "%s\r\n"
 +		      "chid: %s\r\n",
  		      ast_channel_name(chan),
- 		      info.context,
- 		      info.exten,
-@@ -2480,7 +2516,9 @@
+-		      info.context,
+-		      info.exten,
+-		      info.cid,
+ 		      S_OR(pbx_builtin_getvar_helper(chan, "REMOTESTATIONID"), ""),
+ 		      S_OR(pbx_builtin_getvar_helper(chan, "LOCALSTATIONID"), ""),
  		      S_OR(pbx_builtin_getvar_helper(chan, "FAXPAGES"), ""),
  		      S_OR(pbx_builtin_getvar_helper(chan, "FAXRESOLUTION"), ""),
  		      S_OR(pbx_builtin_getvar_helper(chan, "FAXBITRATE"), ""),
