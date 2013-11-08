@@ -1,7 +1,18 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
 --- asterisk-base-11.3.0/apps/app_wms.c	2013-10-28 10:11:56.063637132 +0000
-+++ asterisk-11.3.0/apps/app_wms.c	2013-10-28 10:17:14.315892000 +0000
-@@ -583,6 +583,7 @@
++++ asterisk-11.3.0/apps/app_wms.c	2013-11-07 18:52:39.968478000 +0000
+@@ -427,6 +427,10 @@
+ 	}
+ 	asteriskSendReply(&chan_vars->trs_reply, chan_vars);
+ 
++	chan_vars->con_id = chan_vars->trs_reply.con_id;
++	chan_vars->edp_id = chan_vars->trs_reply.sender;
++	chan_vars->cmd_cnt = chan_vars->trs_reply.cmd_cnt;
++
+    // Initialize before loop
+    memset(&chan_vars->trs_reply, 0, sizeof(chan_vars->trs_reply));
+ 
+@@ -583,6 +587,7 @@
     struct ast_frame *f;
     cmd_ast trs_cmd;
     int nbytes = 0;
@@ -9,7 +20,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
     tempcs[0] = chan;
     numcs = 1;
-@@ -635,6 +636,35 @@
+@@ -635,6 +640,32 @@
           ast_indicate(chan, AST_CONTROL_PROGRESS);
           chan_vars->early_media = ast_tvnow();
        }
@@ -21,12 +32,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +
 +         s_fax_tone_detected = 1;
 +
-+         // Sending event UNSOLICITED_EVENT with USR_DEF_TONE_DETECTED
-+
-+         memset(&chan_vars->trs_reply, 0, sizeof(reply_ast));
-+         chan_vars->trs_reply.con_id = trs_cmd.con_id;
-+         chan_vars->trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
-+         chan_vars->trs_reply.sender = trs_cmd.edp_id;
++         chan_vars->trs_reply.con_id = chan_vars->con_id;
++         chan_vars->trs_reply.sender = chan_vars->edp_id;
++         chan_vars->trs_reply.cmd_cnt = chan_vars->cmd_cnt;
 +
 +         chan_vars->trs_reply.error = FALSE;
 +
@@ -45,7 +53,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
        who = ast_waitfor_nandfds(tempcs, numcs, &chan_vars->trs_fd, 1, NULL, &data_available, &chan_vars->ms);
  		if (!who && (data_available < 0) && (chan_vars->ms)) 
        {
-@@ -685,6 +715,8 @@
+@@ -685,6 +716,8 @@
                 case CONCAL: connect_call(chan, trs_cmd, chan_vars); break;
  					case ACCICA: accept_icall(chan, trs_cmd, chan_vars); break;
                 case REJICA: reject_icall(chan, trs_cmd, chan_vars); break;                  
@@ -54,7 +62,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                 default: ast_log(LOG_ERROR, "Got unknown cmd_id %d\n", trs_cmd.cmd_id); break;
  				}
           }
-@@ -859,6 +891,13 @@
+@@ -859,6 +892,13 @@
              }
  				if (f) ast_frfree(f);
  			}
@@ -68,9 +76,22 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  			else
  			{
              if (option_verbose >= 3)
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.h asterisk-11.3.0/apps/app_wms.h
+--- asterisk-base-11.3.0/apps/app_wms.h	2013-10-28 10:11:56.055637319 +0000
++++ asterisk-11.3.0/apps/app_wms.h	2013-11-07 18:38:53.182511000 +0000
+@@ -65,6 +65,9 @@
+    asr_struct asr;
+ 	reply_ast trs_reply;
+    int chan_id;                  // InoVox Channel ID
++   unsigned long con_id;      // connection id
++   unsigned long cmd_cnt;     // command count
++   endpoint_id edp_id;        // endpoint id
+    struct
+    {
+       rec_frame recFrame;
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
 --- asterisk-base-11.3.0/apps/vsrvdefs.h	2013-10-28 10:11:56.067637202 +0000
-+++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-06 11:59:40.439857000 +0000
++++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-07 17:06:03.583887148 +0000
 @@ -56,6 +56,18 @@
  /* Conference_event */
  #define USER_EXITED_CONFERENCE   0
@@ -138,7 +159,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  // - LR - WARNING - LOOK OUT FOR SIZEOF(reply_ast) ...
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
 --- asterisk-base-11.3.0/apps/wms_aux.c	2013-10-28 10:11:56.039637157 +0000
-+++ asterisk-11.3.0/apps/wms_aux.c	2013-10-29 17:40:46.103016000 +0000
++++ asterisk-11.3.0/apps/wms_aux.c	2013-11-07 17:06:03.587887171 +0000
 @@ -721,7 +721,21 @@
  }
  
@@ -163,7 +184,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.h asterisk-11.3.0/apps/wms_aux.h
 --- asterisk-base-11.3.0/apps/wms_aux.h	2013-10-28 10:11:56.043637237 +0000
-+++ asterisk-11.3.0/apps/wms_aux.h	2013-10-29 17:41:42.377368000 +0000
++++ asterisk-11.3.0/apps/wms_aux.h	2013-11-07 17:06:03.591897893 +0000
 @@ -44,5 +44,6 @@
  void post_error(cmd_ast trs_cmd, ast_vars *chan_vars, int event, int error);
  void send_asr(struct ast_frame *, ast_vars *);
@@ -173,7 +194,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637210 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-06 11:59:36.767778000 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-07 17:06:03.595887225 +0000
 @@ -1409,8 +1409,364 @@
  }
  
@@ -541,7 +562,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.h asterisk-11.3.0/apps/wms_inoapi.h
 --- asterisk-base-11.3.0/apps/wms_inoapi.h	2013-10-28 10:11:56.043637237 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.h	2013-10-28 10:17:14.327887000 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.h	2013-11-07 17:06:03.599887265 +0000
 @@ -33,6 +33,8 @@
  void route_endpoint(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
  void stop_operation(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
@@ -553,7 +574,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  void kill_conference_thread(ast_vars *chan_vars);
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
 --- asterisk-base-11.3.0/channels/chan_sip.c	2013-10-28 10:11:50.967887486 +0000
-+++ asterisk-11.3.0/channels/chan_sip.c	2013-11-05 11:13:26.170319000 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2013-11-07 17:06:03.631887099 +0000
 @@ -6558,7 +6558,7 @@
  	/* T.38 re-INVITE FAX detection should never be done for outgoing calls,
  	 * so ensure it is disabled.
@@ -624,7 +645,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	}
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
 --- asterisk-base-11.3.0/include/asterisk/channel.h	2013-10-28 10:11:52.271637251 +0000
-+++ asterisk-11.3.0/include/asterisk/channel.h	2013-10-28 10:17:14.383887000 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2013-11-07 17:06:03.659887157 +0000
 @@ -186,6 +186,8 @@
  #define MEETME_KICK_LAST      (1 << 12)
  #define MEETME_DO_RECORD      (1 << 13)
@@ -636,7 +657,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/res_fax.h asterisk-11.3.0/include/asterisk/res_fax.h
 --- asterisk-base-11.3.0/include/asterisk/res_fax.h	2013-10-28 10:11:52.127637179 +0000
-+++ asterisk-11.3.0/include/asterisk/res_fax.h	2013-10-28 10:17:14.387887000 +0000
++++ asterisk-11.3.0/include/asterisk/res_fax.h	2013-11-07 17:06:03.671887172 +0000
 @@ -141,6 +141,8 @@
  	);
  	/*! the number of pages sent/received during a fax session */
@@ -648,7 +669,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		/*! dontuse dummy variable - do not ever use */	
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
 --- asterisk-base-11.3.0/res/res_fax.c	2013-10-28 10:12:18.935637193 +0000
-+++ asterisk-11.3.0/res/res_fax.c	2013-11-06 09:43:53.873959000 +0000
++++ asterisk-11.3.0/res/res_fax.c	2013-11-07 17:06:03.679887109 +0000
 @@ -1141,31 +1141,34 @@
  static int report_fax_status(struct ast_channel *chan, struct ast_fax_session_details *details, const char *status)
  {
@@ -807,7 +828,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	ast_free(filenames);
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
 --- asterisk-base-11.3.0/res/res_fax_spandsp.c	2013-10-28 10:12:20.515637164 +0000
-+++ asterisk-11.3.0/res/res_fax_spandsp.c	2013-10-30 11:48:24.383141000 +0000
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2013-11-07 17:07:42.255384000 +0000
 @@ -66,6 +66,9 @@
  #include "asterisk/res_fax.h"
  #include "asterisk/channel.h"
@@ -827,7 +848,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  static void t30_phase_e_handler(t30_state_t *t30_state, void *data, int completion_code);
  static void spandsp_log(int level, const char *msg);
  static int update_stats(struct spandsp_pvt *p, int completion_code);
-@@ -346,6 +351,133 @@
+@@ -346,6 +351,138 @@
  	return 0;
  }
  
@@ -836,6 +857,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   struct ast_fax_session *s = data;
 +   const char *s_tmp, *s_chid;
 +   int s_result = T30_ERR_OK;
++   t30_stats_t stats;
++
++   t30_get_transfer_statistics(t30_state, &stats);
 +
 +   // 131 is the spandsp ok completion code for phase b when receiving
 +   // 128 is the spandsp ok completion code for phase b when sending
@@ -870,6 +894,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                       "LocalStationID: %s\r\n"
 +                       "Channel: %s\r\n"
 +                       "Maxrate: %d\r\n"
++                       "TransferRate: %d\r\n"
 +                       "CompletionCode: %d\r\n"
 +                       "ResultStr: %s\r\n"
 +                       "chid: %s\r\n",
@@ -878,6 +903,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                       s->details->localstationid,
 +                       ast_channel_name(s->chan),
 +                       s->details->maxrate,
++                       stats.bit_rate,
 +                       s_result,
 +                       s->details->resultstr,
 +                       s_chid
@@ -961,7 +987,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  /*! \brief Phase E handler callback.
   * \param t30_state the span t30 state
   * \param data this will be the ast_fax_session
-@@ -361,8 +493,10 @@
+@@ -361,8 +498,10 @@
  	char headerinfo[T30_MAX_PAGE_HEADER_INFO + 1];
  	const char *c;
  	t30_stats_t stats;
@@ -973,7 +999,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	p->isdone = 1;
  
-@@ -372,14 +506,16 @@
+@@ -372,14 +511,16 @@
  
  	if (completion_code == T30_ERR_OK) {
  		ast_string_field_set(s->details, result, "SUCCESS");
@@ -994,7 +1020,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	if ((c = t30_get_tx_ident(t30_state))) {
  		ast_string_field_set(s->details, localstationid, c);
-@@ -396,11 +532,66 @@
+@@ -396,11 +537,66 @@
  #endif
  
  	ast_string_field_build(s->details, transfer_rate, "%d", stats.bit_rate);
@@ -1063,7 +1089,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  }
  
  /*! \brief Send spandsp log messages to asterisk.
-@@ -911,6 +1102,10 @@
+@@ -911,6 +1107,10 @@
  
  	/* perhaps set_transmit_on_idle() should be called */
  
