@@ -1,59 +1,113 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
 --- asterisk-base-11.3.0/apps/app_wms.c	2013-10-28 10:11:56.063637132 +0000
-+++ asterisk-11.3.0/apps/app_wms.c	2013-11-07 18:52:39.968478000 +0000
-@@ -427,6 +427,10 @@
- 	}
- 	asteriskSendReply(&chan_vars->trs_reply, chan_vars);
++++ asterisk-11.3.0/apps/app_wms.c	2013-11-14 11:33:23.664640000 +0000
+@@ -166,6 +166,7 @@
+    snprintf(chan_vars->trs_reply.body.userData, sizeof(chan_vars->trs_reply.body.userData), ast_channel_uniqueid(chan));
+    snprintf(chan_vars->trs_reply.body.channelId, sizeof(chan_vars->trs_reply.body.channelId), ast_channel_name(chan));
+    chan_vars->conf_thread = AST_PTHREADT_NULL;
++   chan_vars->fax_thread = AST_PTHREADT_NULL;
  
-+	chan_vars->con_id = chan_vars->trs_reply.con_id;
-+	chan_vars->edp_id = chan_vars->trs_reply.sender;
-+	chan_vars->cmd_cnt = chan_vars->trs_reply.cmd_cnt;
+ 	/* --> */
+ 	if (strchr((char *)data,'#') == NULL)	// INBOUND CALL
+@@ -436,11 +437,17 @@
+    if (!ast_opt_use_smra) run_asterisk_channel(chan, chan_vars);
+    else run_smra_channel(chan, chan_vars);
+ 
++   if(chan_vars->fax_thread != AST_PTHREADT_NULL)
++   {
++      pthread_join(chan_vars->fax_thread, NULL);
++      chan_vars->fax_thread = AST_PTHREADT_NULL;
++   }
 +
-    // Initialize before loop
-    memset(&chan_vars->trs_reply, 0, sizeof(chan_vars->trs_reply));
+    shutdown(trs_sock_fd, SHUT_RDWR);
+ 	close(trs_sock_fd);
+ 	trs_sock_fd = -1;
  
-@@ -583,6 +587,7 @@
+-   if (chan_vars != NULL) 
++	if (chan_vars != NULL)
+    {
+       free(chan_vars);
+       chan_vars = NULL;
+@@ -583,6 +590,8 @@
     struct ast_frame *f;
     cmd_ast trs_cmd;
     int nbytes = 0;
-+   int s_fax_tone_detected= 0;
++   int s_fax_tone_detected = 0;
++   reply_ast trs_reply;
  
     tempcs[0] = chan;
     numcs = 1;
-@@ -635,6 +640,32 @@
+@@ -598,7 +607,7 @@
+          break;
+ 	   }
+       // If conference is enabled or we are the 2nd channel in a route_endpoint, don't lock channel
+-      if (chan_vars->conference.id || (ast_bridged_channel(chan) && chan_vars->action.type != ACTION_ROUEND)) 
++      if (chan_vars->conference.id || (ast_bridged_channel(chan) && chan_vars->action.type != ACTION_ROUEND) || chan_vars->fax.enabled)
+       {
+          //don't block channel 
+          tempcs[0] = 0; numcs = 0;
+@@ -635,6 +644,51 @@
           ast_indicate(chan, AST_CONTROL_PROGRESS);
           chan_vars->early_media = ast_tvnow();
        }
 +
-+      if (ast_test_flag(ast_channel_inoflags(chan), FAX_TONE_DETECTED))
++      if(chan_vars->fax.enabled == FALSE)
 +      {
-+         if (option_verbose >= 3)
-+            ast_verbose(VERBOSE_PREFIX_3 "Fax Tone detected on channel %s\n", ast_channel_name(chan));
++         if (ast_test_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED))
++         {
++            if (option_verbose >= 3)
++               ast_verbose(VERBOSE_PREFIX_3 "Fax Tone CNG detected on channel %s\n", ast_channel_name(chan));
 +
-+         s_fax_tone_detected = 1;
++            s_fax_tone_detected = 1;
 +
-+         chan_vars->trs_reply.con_id = chan_vars->con_id;
-+         chan_vars->trs_reply.sender = chan_vars->edp_id;
-+         chan_vars->trs_reply.cmd_cnt = chan_vars->cmd_cnt;
++            trs_reply.body.g_ret_value = 153; //FAX CNG Calling Tone (153)
 +
-+         chan_vars->trs_reply.error = FALSE;
++            trs_reply.error = FALSE;
 +
-+         chan_vars->trs_reply.event = UNSOLICITED_EVENT;
-+         chan_vars->trs_reply.evt_type = USR_DEF_TONE_DETECTED;
++            trs_reply.event = UNSOLICITED_EVENT;
++            trs_reply.evt_type = USR_DEF_TONE_DETECTED;
 +
-+         chan_vars->trs_reply.body.g_ret_value = 150; //FAX CED Answer Tone (150)
++            asteriskSendReply(&trs_reply, chan_vars);
 +
-+         asteriskSendReply(&chan_vars->trs_reply, chan_vars);
++            ast_channel_lock(chan);
++            ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
++            ast_channel_unlock(chan);
++         }
++         else if(ast_test_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED))
++         {
++            if (option_verbose >= 3)
++               ast_verbose(VERBOSE_PREFIX_3 "Fax Tone CED detected on channel %s\n", ast_channel_name(chan));
 +
-+         ast_channel_lock(chan);
-+         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_DETECTED);
-+         ast_channel_unlock(chan);
++            s_fax_tone_detected = 1;
++
++            trs_reply.body.g_ret_value = 150; //FAX CED Answer Tone (150)
++
++            trs_reply.error = FALSE;
++
++            trs_reply.event = UNSOLICITED_EVENT;
++            trs_reply.evt_type = USR_DEF_TONE_DETECTED;
++
++            asteriskSendReply(&trs_reply, chan_vars);
++
++            ast_channel_lock(chan);
++            ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
++            ast_channel_unlock(chan);
++         }
 +      }
 +
        who = ast_waitfor_nandfds(tempcs, numcs, &chan_vars->trs_fd, 1, NULL, &data_available, &chan_vars->ms);
  		if (!who && (data_available < 0) && (chan_vars->ms)) 
        {
-@@ -685,6 +716,8 @@
+@@ -654,7 +708,7 @@
+          while ((nbytes = recv(chan_vars->trs_fd, &trs_cmd, sizeof(trs_cmd), 0)) > 0)
+          {
+             if (nbytes != sizeof(trs_cmd))
+-         {
++            {
+                ast_log(LOG_ERROR, "Got incomplete command on chan %s\n", ast_channel_name(chan));
+                sleep(1000);
+                continue;
+@@ -685,24 +739,33 @@
                 case CONCAL: connect_call(chan, trs_cmd, chan_vars); break;
  					case ACCICA: accept_icall(chan, trs_cmd, chan_vars); break;
                 case REJICA: reject_icall(chan, trs_cmd, chan_vars); break;                  
@@ -62,15 +116,61 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                 default: ast_log(LOG_ERROR, "Got unknown cmd_id %d\n", trs_cmd.cmd_id); break;
  				}
           }
-@@ -859,6 +892,13 @@
+          if (!nbytes || (errno != EWOULDBLOCK && errno != EAGAIN))
+          {
+-            // Don't hangup again if already hanging up
+-            if (chan_vars->shutdown) break;
+-            
+-            if (!nbytes || errno == ECONNRESET) ast_log(LOG_WARNING, "TRS socket closed on channel %s\n", ast_channel_name(chan));
+-            else ast_log(LOG_ERROR, "TRS socket error (%d: %s) on channel %s\n", errno, strerror(errno), ast_channel_name(chan));
++            if (chan_vars->fax.enabled == FALSE)
++            {
++               // Don't hangup again if already hanging up
++               if (chan_vars->shutdown) break;
+ 
+-				chan_vars->shutdown = 1;
+-				
+-            if (ast_channel_state(chan) != AST_STATE_UP)
+-               ast_channel_hangupcause_set(chan, ast_channel_defhangcause(chan));
+-            
+-				// ast_softhangup(chan, AST_CAUSE_NORMAL);// hangup line
+-            break;
++               //avoid error log if release endpoint during fax transmission
++               if(!ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
++               {
++                  if (!nbytes || errno == ECONNRESET) ast_log(LOG_WARNING, "TRS socket closed on channel %s\n", ast_channel_name(chan));
++                  else ast_log(LOG_ERROR, "TRS socket error (%d: %s) on channel %s\n", errno, strerror(errno), ast_channel_name(chan));
++               }
++
++               chan_vars->shutdown = 1;
++
++               if (ast_channel_state(chan) != AST_STATE_UP)
++                  ast_channel_hangupcause_set(chan, ast_channel_defhangcause(chan));
++
++                ast_softhangup(chan, AST_CAUSE_NORMAL);// hangup line
++               break;
++            }
+          }		
+ 		}
+ 
+@@ -737,7 +800,10 @@
+ 	               asteriskSendReply(&chan_vars->trs_reply, chan_vars);
+                }
+             }
+-				else if (f->frametype == AST_FRAME_DTMF && who == chan) process_digit(chan, chan_vars, f->subclass.integer);
++				else if (f->frametype == AST_FRAME_DTMF && who == chan && s_fax_tone_detected != 1)
++				{
++				   process_digit(chan, chan_vars, f->subclass.integer);
++				}
+ 				else if (f->frametype == AST_FRAME_CONTROL && who == chan && (f->subclass.integer == AST_CONTROL_HANGUP ||
+                          f->subclass.integer == AST_CONTROL_BUSY || f->subclass.integer == AST_CONTROL_CONGESTION || f->subclass.integer == AST_CONTROL_TRANSFER))
+ 				{
+@@ -859,6 +925,10 @@
              }
  				if (f) ast_frfree(f);
  			}
 +         else if(s_fax_tone_detected == 1)
 +         {
-+            if (option_verbose >= 3)
-+               ast_verbose(VERBOSE_PREFIX_3 "UNSOLICITED_EVENT with USR_DEF_TONE_DETECTED on channel %s\n", ast_channel_name(chan));
-+
 +            s_fax_tone_detected = 0;
 +         }
  			else
@@ -78,7 +178,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
              if (option_verbose >= 3)
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.h asterisk-11.3.0/apps/app_wms.h
 --- asterisk-base-11.3.0/apps/app_wms.h	2013-10-28 10:11:56.055637319 +0000
-+++ asterisk-11.3.0/apps/app_wms.h	2013-11-07 18:38:53.182511000 +0000
++++ asterisk-11.3.0/apps/app_wms.h	2013-11-11 16:23:20.058375000 +0000
 @@ -65,6 +65,9 @@
     asr_struct asr;
  	reply_ast trs_reply;
@@ -89,9 +189,27 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
     struct
     {
        rec_frame recFrame;
+@@ -107,7 +110,16 @@
+ 	   struct ast_channel *cs[2];		// channel queue used in route endpoint command
+ 	   char bridge_retkey;				// key used to return from bridged mode
+ 	   char FILE_URL[256];
+-   }  action;
++   } action;
++   struct
++   {
++      int enabled;    // flag TRUE / FALSE
++      char fax_file[FAX_FILENAME_SIZE];     // file to send / receive
++      char csid[FAX_CSID_STR_SIZE];         // Customer Subscriber Identification
++      char header[FAX_HEADER_STR_SIZE+1];   // fax header to send
++      unsigned short max_baudrate;           // maximum transmission baud rate (2400 to 14400)
++   } fax;
++   pthread_t fax_thread;
+ } ast_vars;
+ 
+ #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
 --- asterisk-base-11.3.0/apps/vsrvdefs.h	2013-10-28 10:11:56.067637202 +0000
-+++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-07 17:06:03.583887148 +0000
++++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-12 14:25:49.453350000 +0000
 @@ -56,6 +56,18 @@
  /* Conference_event */
  #define USER_EXITED_CONFERENCE   0
@@ -111,6 +229,15 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  /* Digit Streaming Definitions */
  #define STREAM_IGNORE      -1
  #define STREAM_STOP        0
+@@ -94,7 +106,7 @@
+ typedef char			   dnis[DIGIT_LENGTH];
+ typedef char            loc_t[DIGIT_LENGTH];
+ 
+-
++#define FAX_RESOURCE    0x0080   /* 0000 0000 1000 0000 Mask for FAX resource */
+ 
+ /* Errors returned in the reply data structure */
+ typedef enum error_value
 @@ -229,6 +241,29 @@
     char trans_rec_fname[256];
  } ROUEND_PARAM;
@@ -159,7 +286,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  // - LR - WARNING - LOOK OUT FOR SIZEOF(reply_ast) ...
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
 --- asterisk-base-11.3.0/apps/wms_aux.c	2013-10-28 10:11:56.039637157 +0000
-+++ asterisk-11.3.0/apps/wms_aux.c	2013-11-07 17:06:03.587887171 +0000
++++ asterisk-11.3.0/apps/wms_aux.c	2013-11-12 14:23:27.432926000 +0000
 @@ -721,7 +721,21 @@
  }
  
@@ -194,8 +321,69 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637210 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-07 17:06:03.595887225 +0000
-@@ -1409,8 +1409,364 @@
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-14 10:21:34.546718000 +0000
+@@ -80,6 +80,8 @@
+  *  
+  ******************************************************************************/
+ static void *conference_thread(void *);
++static void *send_fax_thread(void *);
++static void *receive_fax_thread(void *);
+ static struct ast_channel *wait_for_answer(struct ast_channel *, struct inast_localuser *, int *);
+ static struct ast_channel *get_rtsp_chan(struct ast_channel *, char *);
+ 
+@@ -385,16 +387,25 @@
+    if (option_verbose >= 3)
+       ast_verbose(VERBOSE_PREFIX_3 "Release on channel %s\n", ast_channel_name(chan));
+ 
+-	if (chan_vars->asr.asr_sock > 2)
+-	{
+-		close(chan_vars->asr.asr_sock);
+-		chan_vars->asr.asr_sock = -1;
+-	}
+-   if (trs_cmd.al_int_val2 >= 100) 
+-      ast_channel_hangupcause_set(chan, trs_cmd.al_int_val2);
++   // stop fax operation
++   if (chan_vars->fax.enabled)
++   {
++      ast_verbose(VERBOSE_PREFIX_3 "FAX Release on channel %s\n", ast_channel_name(chan));
++      ast_set_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
++   }
++   else
++   {
++      if (chan_vars->asr.asr_sock > 2)
++      {
++         close(chan_vars->asr.asr_sock);
++         chan_vars->asr.asr_sock = -1;
++      }
++      if (trs_cmd.al_int_val2 >= 100)
++         ast_channel_hangupcause_set(chan, trs_cmd.al_int_val2);
+ 
+-	//ast_softhangup(chan, AST_CAUSE_NORMAL);// hangup line
+-	chan_vars->shutdown = 1;
++      //ast_softhangup(chan, AST_CAUSE_NORMAL);// hangup line
++      chan_vars->shutdown = 1;
++   }
+ }
+ 
+ /******************************************************************************
+@@ -429,6 +440,16 @@
+ {
+ 	reply_ast trs_reply;
+ 
++   if (option_verbose >= 4)
++      ast_verbose(VERBOSE_PREFIX_4 "Stop Operation %d\n",trs_cmd.al_int_val1);
++
++   // stop fax operation
++   if (chan_vars->fax.enabled)
++   {
++      if(trs_cmd.al_int_val1 |= FAX_RESOURCE)
++      ast_set_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
++   }
++
+    // stop play announcement in conference
+    if (chan_vars->conference.id) 
+    {
+@@ -1409,8 +1430,589 @@
  }
  
  
@@ -206,40 +394,120 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 + *****************************************************************************/
 +void send_fax(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars)
 +{
-+   struct ast_app *app; // AGI RELATED
-+   char execCmd[FAX_FILENAME_SIZE+10];
-+   reply_ast trs_reply;
 +   char s_chid[256];
-+   char s_maxbaudrate[20];
-+   int s_error = 0;
-+   const char *s_tmp;
-+   int s_result = 0;
-+   time_t s_timeout;
- 
-+   if (option_verbose >= 4)
-+       ast_verbose(VERBOSE_PREFIX_4 "send_fax: Fax call operation %d on channel %s\n", trs_cmd.al_int_val1, ast_channel_name(chan));
- 
-+   if (chan == NULL)
-+   {
-+      ast_log(LOG_ERROR, "send_fax: Chan is NULL\n");
-+      return;
-+   }
- 
-+   if (!chan_vars->chan_id) chan_vars->chan_id = trs_cmd.ch_index; //channel id
- 
-+   snprintf(s_chid, sizeof(s_chid), "%d", trs_cmd.ch_index);
++   reply_ast trs_reply;
 +
-+   ast_channel_lock(chan);
-+   pbx_builtin_setvar_helper(chan, "FAXCHINDEX", S_OR(s_chid, NULL));
-+   pbx_builtin_setvar_helper(chan, "FAXCSID", S_OR(trs_cmd.fax_param.csid, NULL));
-+   pbx_builtin_setvar_helper(chan, "FAXTRTOTALSIZE", NULL);
-+   ast_channel_unlock(chan);
-+
++   chan_vars->con_id = trs_cmd.con_id;
++   chan_vars->cmd_cnt = trs_cmd.cmd_cnt;
++   chan_vars->edp_id = trs_cmd.edp_id;
 +
 +   memset(&trs_reply, 0, sizeof(trs_reply));
 +   trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
 +   trs_reply.con_id = trs_cmd.con_id;
 +   trs_reply.sender = trs_cmd.edp_id;
++   trs_reply.event = SEND_FAX_COMPLETED;
++   trs_reply.error = TRUE;
++
++   trs_reply.body.fax_reply.event = SEND_FAX_COMPLETED;      // event returned
++   trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
++   trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
++
++   if (option_verbose >= 4)
++       ast_verbose(VERBOSE_PREFIX_4 "send_fax: Fax call on channel %s\n",ast_channel_name(chan));
++
++   if (chan == NULL)
++   {
++      ast_log(LOG_ERROR, "send_fax: Chan is NULL\n");
++   }
++   else if (chan_vars->fax.enabled)
++   {
++      ast_log(LOG_ERROR, "send_fax: Fax already in use on ch %04d\n",trs_cmd.ch_index);
++   }
++   else
++   {
++      chan_vars->fax.enabled = TRUE;
++
++      if (!chan_vars->chan_id) chan_vars->chan_id = trs_cmd.ch_index; //channel id
++
++      snprintf(s_chid, sizeof(s_chid), "%d", trs_cmd.ch_index);
++
++      ast_channel_lock(chan);
++      pbx_builtin_setvar_helper(chan, "FAXCHINDEX", S_OR(s_chid, NULL));
++      pbx_builtin_setvar_helper(chan, "FAXCSID", S_OR(trs_cmd.fax_param.csid, NULL));
++      pbx_builtin_setvar_helper(chan, "FAXTRTOTALSIZE", NULL);
++      ast_channel_unlock(chan);
++
++      if(trs_cmd.fax_param.fax_file)
++      {
++         snprintf(chan_vars->fax.fax_file, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.fax_file);
++
++         if (option_verbose >= 3)
++            ast_verbose(VERBOSE_PREFIX_3 "send_fax: |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
++
++         snprintf(chan_vars->fax.csid, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.csid);
++         snprintf(chan_vars->fax.header, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.header);
++         chan_vars->fax.max_baudrate = trs_cmd.fax_param.max_baudrate;
++
++         if (ast_pthread_create_background(&chan_vars->fax_thread, NULL, send_fax_thread, chan_vars) < 0)
++         {
++            ast_log(LOG_ERROR, "send_fax: thread creation ERROR |%s| for fax %s on ch %04d - %s\n", strerror(errno),
++                  trs_cmd.fax_param.fax_file, trs_cmd.ch_index, ast_channel_name(chan));
++         }
++         else
++         {
++            // Thread create with success, it is not necessary to send a event reply
++            if (option_verbose >= 3)
++                 ast_verbose(VERBOSE_PREFIX_3 "send_fax: thread created for |%s| on channel %s\n",
++                       trs_cmd.fax_param.fax_file, ast_channel_name(chan));
++
++            return;
++         }
++
++      }
++      else  // error file missing
++      {
++         ast_log(LOG_WARNING, "send_fax: File missing on channel %s\n", ast_channel_name(chan));
++         trs_reply.body.error_value = FILE_NOT_FOUND;
++      }
++   }
++
++   ast_log(LOG_ERROR, "send_fax: error, sending event on ch %04d\n", trs_cmd.ch_index);
++   //Something wrong happen, send a event with error
++   asteriskSendReply(&trs_reply, chan_vars);
++
++   chan_vars->fax.enabled = FALSE;
++   return;
++}
++
++/******************************************************************************
++ *        NAME: send_fax_thread()
++ * DESCRIPTION: thread function, it is necessary to create a new thread because
++ *              pbx_exec blocks the thread. If the main thread is blocked it is
++ *              not possible to interrupt the operation.
++ *              (stop_operation, release_enpoint, ...)
++ *****************************************************************************/
++static void *send_fax_thread(void *data)
++{
++   char execCmd[FAX_FILENAME_SIZE+10];
++   char s_maxbaudrate[20];
++   struct ast_app *app; // AGI RELATED
++   reply_ast trs_reply;
++   int s_error = 0;
++   const char *s_tmp;
++   int s_result = 0;
++   time_t s_timeout;
++
++   struct ast_channel *chan;
++   ast_vars *chan_vars;
++
++   chan_vars = (ast_vars *) data;
++   chan = chan_vars->chan;
++
++   memset(&trs_reply, 0, sizeof(trs_reply));
++
++   trs_reply.con_id = chan_vars->con_id;
++   trs_reply.cmd_cnt = chan_vars->cmd_cnt;
++   trs_reply.sender = chan_vars->edp_id;
 +
 +   trs_reply.event = SEND_FAX_COMPLETED;
 +   trs_reply.error = TRUE;
@@ -248,139 +516,179 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
 +   trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
 +
-+
-+   ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
-+
 +   // ->$CSID->$HEADER->$FAX_FILE->$FAX_COVER->#HEADER_TYPE->#MAX_BAUD->
 +   if ((app = pbx_findapp("SendFAX"))) // application found// AGI RELATED
 +   {
-+      if(trs_cmd.fax_param.fax_file)
++
++      snprintf(execCmd, sizeof(execCmd), "%s,dfzs", chan_vars->fax.fax_file);
++
++      if(chan_vars->fax.csid)
 +      {
-+         snprintf(execCmd, sizeof(execCmd), "%s,dfzs", trs_cmd.fax_param.fax_file);
++         ast_func_write(chan, "FAXOPT(LocalStationID)", chan_vars->fax.csid);
++      }
 +
++      if (chan_vars->fax.header)
++      {
++         ast_func_write(chan, "FAXOPT(headerinfo)", chan_vars->fax.header);
++      }
++
++      if (chan_vars->fax.max_baudrate)
++      {
++         sprintf(s_maxbaudrate, "%d",chan_vars->fax.max_baudrate);
++         ast_func_write(chan, "FAXOPT(maxrate)", (const char *)s_maxbaudrate);
++      }
++
++      ast_channel_ref(chan); // when calling a new app is necessary to increase the channel ref
++      s_result = pbx_exec(chan, app, execCmd);
++
++      if (option_verbose >= 3)
++         ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Exiting SendFax on channel %s\n", ast_channel_name(chan));
++
++      // check if channel was destroyed
++      if(chan != NULL)
++      {
++         // check if channel was hangup
++         if ((ast_check_hangup(chan) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)))
++         {
++            if (option_verbose >= 3)
++               ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Exiting SendFax on channel %s\n", ast_channel_name(chan));
++
++            chan_vars->fax.enabled = FALSE;
++            return NULL;
++         }
++      }
++      else
++      {
++         chan_vars->fax.enabled = FALSE;
++         return NULL;
++      }
++
++      if(ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
++      {
++         // event changed, maybe a release_enpoind or stop_operation
++         // return without sending an event
 +         if (option_verbose >= 3)
-+            ast_verbose(VERBOSE_PREFIX_3 "SendFAX |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
++            ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Fax stopped on channel %s\n", ast_channel_name(chan));
 +
-+         if(trs_cmd.fax_param.csid)
++         // Clear FAX_TONE_DETECTED flag in case it was activated
++         ast_channel_lock(chan);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
++         ast_channel_unlock(chan);
++
++         chan_vars->fax.enabled = FALSE;
++
++         return NULL;
++      }
++
++      if(s_result != 0)
++      {
++         ast_log(LOG_ERROR, "send_fax_thread: pbx_exec result: %d on channel %s\n",s_result, ast_channel_name(chan));
++
++         ast_channel_lock(chan);
++         if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERROR")))
 +         {
-+            ast_func_write(chan, "FAXOPT(LocalStationID)", trs_cmd.fax_param.csid);
-+         }
++            s_error = fax_error_to_code(s_tmp);
++            ast_log(LOG_ERROR, "send_fax_thread: FAXERROR is s_error: %d\n", s_error);
 +
-+         if (trs_cmd.fax_param.header)
-+         {
-+            ast_func_write(chan, "FAXOPT(headerinfo)", trs_cmd.fax_param.header);
-+         }
-+
-+         if (trs_cmd.fax_param.max_baudrate)
-+         {
-+            sprintf(s_maxbaudrate, "%d",trs_cmd.fax_param.max_baudrate);
-+            ast_func_write(chan, "FAXOPT(maxrate)", (const char *)s_maxbaudrate);
-+         }
-+
-+         s_result = pbx_exec(chan, app, execCmd);
-+
-+         if (option_verbose >= 3)
-+            ast_verbose(VERBOSE_PREFIX_3 "send_fax: Exiting SendFax on channel %s\n", ast_channel_name(chan));
-+
-+         if(s_result == -1)
-+         {
-+            ast_log(LOG_ERROR, "send_fax: pbx_exec result: %d\n",s_result);
-+
-+            ast_channel_lock(chan);
-+            if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERROR")))
-+            {
-+               s_error = fax_error_to_code(s_tmp);
-+               ast_log(LOG_ERROR, "FAXERROR is s_error: %d\n", s_error);
-+
-+               trs_reply.body.fax_reply.status = s_error; // FAILED
-+               trs_reply.body.error_value = s_error; // FAILED
-+            }
-+            else
-+            {
-+               ast_log(LOG_ERROR, "FAXERROR is NULL\n");
-+               trs_reply.body.fax_reply.status = RESOURCE_ERROR;
-+               trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
-+            }
-+            ast_channel_unlock(chan);
-+
++            trs_reply.body.fax_reply.status = s_error; // FAILED
++            trs_reply.body.error_value = s_error; // FAILED
 +         }
 +         else
-+         { // wait for phase E callback to return
++         {
++            ast_log(LOG_ERROR, "send_fax_thread: FAXERROR is NULL\n");
++            trs_reply.body.fax_reply.status = RESOURCE_ERROR;
++            trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
++         }
++         ast_channel_unlock(chan);
 +
-+            s_timeout = ast_tvnow().tv_sec + 30; // wait 30 seconds before timeout
++      }
++      else
++      { // wait for phase E callback to return
 +
-+            while(1)
++         ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Wait for phase E callback on ch %d\n",
++                                   chan_vars->trs_reply.chan_id);
++
++         s_timeout = ast_tvnow().tv_sec + 30; // wait 30 seconds before timeout
++
++         while(1)
++         {
++            if (ast_test_flag(ast_channel_inoflags(chan), FAX_PHASE_E_EXIT))
 +            {
-+               if (ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
++
++               ast_channel_lock(chan);
++
++               if(strncmp(pbx_builtin_getvar_helper(chan, "FAXSTATUS"),"SUCCESS",7))
 +               {
-+
-+                  ast_channel_lock(chan);
-+
-+                  if(strncmp(pbx_builtin_getvar_helper(chan, "FAXSTATUS"),"SUCCESS",7))
++                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
 +                  {
-+                     if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
-+                     {
-+                        sscanf(s_tmp,"%d", &s_error);
-+                        ast_log(LOG_ERROR, "FAXERROR is  s_error: %d + FAX_ERROR_MASK: %d\n", s_error, FAX_ERROR_MASK);
-+                        trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
-+                        trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
-+                     }
-+                     else
-+                     {
-+                        ast_log(LOG_ERROR, "FAXERRORVALUE is NULL\n");
-+                        trs_reply.body.fax_reply.status = FAX_ERROR_MASK;
-+                        trs_reply.body.error_value = FAX_ERROR_MASK; // FAILED
-+                     }
++                     sscanf(s_tmp,"%d", &s_error);
++                     ast_log(LOG_ERROR, "send_fax_thread: FAXERROR is  s_error: %d + FAX_ERROR_MASK: %d\n", s_error, FAX_ERROR_MASK);
++                     trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
++                     trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
 +                  }
 +                  else
 +                  {
-+                     trs_reply.body.fax_reply.status = 0; // SUCCESS
-+                     trs_reply.error = FALSE;
++                     ast_log(LOG_ERROR, "send_fax_thread: FAXERRORVALUE is NULL\n");
++                     trs_reply.body.fax_reply.status = FAX_ERROR_MASK;
++                     trs_reply.body.error_value = FAX_ERROR_MASK; // FAILED
 +                  }
++               }
++               else
++               {
++                  if (option_verbose >= 3)
++                     ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Fax status successful on ch %d\n",
++                                chan_vars->trs_reply.chan_id);
 +
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXBITRATE")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.speed);
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXRESOLUTION")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.resolution);
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXPAGES")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.pages);
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXTRTOTALSIZE")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.trsize);
-+
-+                  ast_channel_unlock(chan);
-+
-+                  ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
-+                  break;
++                  trs_reply.body.fax_reply.status = 0; // SUCCESS
++                  trs_reply.error = FALSE;
 +               }
 +
-+               if (s_timeout < ast_tvnow().tv_sec)
-+                  break;
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXBITRATE")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.speed);
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXRESOLUTION")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.resolution);
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXPAGES")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.pages);
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXTRTOTALSIZE")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.trsize);
 +
-+               usleep(100000);
++               ast_channel_unlock(chan);
++
++               ast_clear_flag(ast_channel_inoflags(chan), FAX_PHASE_E_EXIT);
++               break;
 +            }
++
++            if (s_timeout < ast_tvnow().tv_sec)
++               break;
++
++            usleep(100000);
 +         }
 +      }
-+      else  // error file missing
-+      {
-+         ast_log(LOG_WARNING, "send_fax: File missing on channel %s\n", ast_channel_name(chan));
-+         trs_reply.body.error_value = FILE_NOT_FOUND;
-+      }
++
 +   }
 +   else // application doesn't exist
 +   {
-+      ast_log(LOG_WARNING, "send_fax: pbx_findapp failed on channel %s\n", ast_channel_name(chan));
++      ast_log(LOG_WARNING, "send_fax_thread: pbx_findapp failed on channel %s\n", ast_channel_name(chan));
 +      trs_reply.body.error_value = RESOURCE_ERROR;
 +   }
 +
 +   // Clear FAX_TONE_DETECTED flag in case it was activated
 +   ast_channel_lock(chan);
-+   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_DETECTED);
++   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
++   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
 +   ast_channel_unlock(chan);
 +
++   if (option_verbose >= 3)
++      ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Sending event SEND_FAX_COMPLETED on ch %d\n",
++                 chan_vars->trs_reply.chan_id);
 +   // send event
 +   asteriskSendReply(&trs_reply, chan_vars);
-+}
 +
++   chan_vars->fax.enabled = FALSE;
++
++   return NULL;
++}
 +
 +/******************************************************************************
 + *        NAME: receive_fax()
@@ -389,32 +697,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 + *****************************************************************************/
 +void receive_fax(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars)
 +{
-+   struct ast_app *app; // AGI RELATED
-+   char execCmd[FAX_FILENAME_SIZE+10];
 +   reply_ast trs_reply;
 +   char s_chid[8];
-+   char s_maxbaudrate[8];
-+   int s_error = 0;
-+   const char *s_tmp;
-+   int s_result = 0;
-+   time_t s_timeout;
 +
-+   if (chan == NULL)
-+   {
-+      ast_log(LOG_ERROR, "receive_fax: Chan is NULL\n");
-+      return;
-+   }
-+
-+   if (!chan_vars->chan_id) chan_vars->chan_id = trs_cmd.ch_index;
-+
-+   snprintf(s_chid, sizeof(s_chid), "%d", trs_cmd.ch_index);
-+
-+   ast_channel_lock(chan);
-+   pbx_builtin_setvar_helper(chan, "FAXCHINDEX", S_OR(s_chid, NULL));
-+   pbx_builtin_setvar_helper(chan, "FAXCSID", S_OR(trs_cmd.fax_param.csid, NULL));
-+   pbx_builtin_setvar_helper(chan, "FAXTRTOTALSIZE", NULL);
-+   ast_channel_unlock(chan);
-+
++   chan_vars->con_id = trs_cmd.con_id;
++   chan_vars->cmd_cnt = trs_cmd.cmd_cnt;
++   chan_vars->edp_id = trs_cmd.edp_id;
 +
 +   memset(&trs_reply, 0, sizeof(trs_reply));
 +   trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
@@ -428,114 +716,51 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;       // channel ID
 +   trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
 +
-+
-+   ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
-+
-+   // ->$FAX_FILE->$CSID->#MAX_BAUD->
-+   if ((app = pbx_findapp("ReceiveFAX"))) // application found// AGI RELATED
++   if (chan == NULL)
 +   {
++      ast_log(LOG_ERROR, "receive_fax: Chan is NULL\n");
++   }
++   else if (chan_vars->fax.enabled)
++   {
++      ast_log(LOG_ERROR, "receive_fax: Fax already in use on ch %04d\n",trs_cmd.ch_index);
++   }
++   else
++   {
++      chan_vars->fax.enabled = TRUE;
++
++      if (!chan_vars->chan_id) chan_vars->chan_id = trs_cmd.ch_index;
++
++      snprintf(s_chid, sizeof(s_chid), "%d", trs_cmd.ch_index);
++
++      ast_channel_lock(chan);
++      pbx_builtin_setvar_helper(chan, "FAXCHINDEX", S_OR(s_chid, NULL));
++      pbx_builtin_setvar_helper(chan, "FAXCSID", S_OR(trs_cmd.fax_param.csid, NULL));
++      pbx_builtin_setvar_helper(chan, "FAXTRTOTALSIZE", NULL);
++      ast_channel_unlock(chan);
++
++      ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
++
 +      if(trs_cmd.fax_param.fax_file)
 +      {
-+         snprintf(execCmd, sizeof(execCmd), "%s,dfzs", trs_cmd.fax_param.fax_file);
++         snprintf(chan_vars->fax.fax_file, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.fax_file);
 +
 +         if (option_verbose >= 3)
-+            ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
++            ast_verbose(VERBOSE_PREFIX_3 "receive_fax |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
 +
-+         if(trs_cmd.fax_param.csid)
++         snprintf(chan_vars->fax.csid, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.csid);
++         chan_vars->fax.max_baudrate = trs_cmd.fax_param.max_baudrate;
++
++         if (ast_pthread_create_background(&chan_vars->fax_thread, NULL, receive_fax_thread, chan_vars) < 0)
 +         {
-+            ast_func_write(chan, "FAXOPT(LocalStationID)", trs_cmd.fax_param.csid);
-+         }
-+
-+         if (trs_cmd.fax_param.max_baudrate)
-+         {
-+            sprintf(s_maxbaudrate, "%d",trs_cmd.fax_param.max_baudrate);
-+
-+            if (option_verbose >= 3)
-+                    ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax maxbaudrate: %s on channel %s\n", s_maxbaudrate, ast_channel_name(chan));
-+
-+            ast_func_write(chan, "FAXOPT(maxrate)", (const char *)s_maxbaudrate);
-+         }
-+
-+         s_result = pbx_exec(chan, app, execCmd);
-+
-+         if (option_verbose >= 3)
-+            ast_verbose(VERBOSE_PREFIX_3 "ReceiveFax: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
-+
-+         if(s_result == -1)
-+         {
-+            ast_log(LOG_ERROR, "ReceiveFax: pbx_exec result: %d\n",s_result);
-+
-+            ast_channel_lock(chan);
-+            if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERROR")))
-+            {
-+               s_error = fax_error_to_code(s_tmp);
-+
-+               ast_log(LOG_ERROR, "FAXERROR is  s_error: %d\n", s_error);
-+
-+               trs_reply.body.fax_reply.status = s_error; // FAILED
-+               trs_reply.body.error_value = s_error; // FAILED
-+            }
-+            else
-+            {
-+               ast_log(LOG_ERROR, "FAXERROR is NULL\n");
-+               trs_reply.body.fax_reply.status = RESOURCE_ERROR;
-+               trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
-+            }
-+            ast_channel_unlock(chan);
-+
++            ast_log(LOG_ERROR, "receive_fax thread creation ERROR |%s| for fax %s on ch %04d - %s\n", strerror(errno),
++                  trs_cmd.fax_param.fax_file, trs_cmd.ch_index, ast_channel_name(chan));
 +         }
 +         else
-+         { // wait for phase E callback to return
-+
-+            s_timeout = ast_tvnow().tv_sec + 30; // wait 30 seconds before timeout
-+
-+            while(1)
-+            {
-+               if (ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
-+               {
-+                  ast_channel_lock(chan);
-+
-+                  if(strncmp(pbx_builtin_getvar_helper(chan, "FAXSTATUS"),"SUCCESS",7))
-+                  {
-+                     if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
-+                     {
-+                        sscanf(s_tmp,"%d", &s_error);
-+                        trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
-+                        trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
-+                     }
-+                     else
-+                     {
-+                        ast_log(LOG_ERROR, "FAXERRORVALUE is NULL\n");
-+                        trs_reply.body.fax_reply.status = FAX_ERROR_MASK;
-+                        trs_reply.body.error_value = FAX_ERROR_MASK; // FAILED
-+                     }
-+                  }
-+                  else
-+                  {
-+                     trs_reply.body.fax_reply.status = 0; // SUCCESS
-+                     trs_reply.error = FALSE;
-+                  }
-+
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXBITRATE")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.speed);
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXRESOLUTION")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.resolution);
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXPAGES")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.pages);
-+                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXTRTOTALSIZE")))
-+                     sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.trsize);
-+
-+                  ast_channel_unlock(chan);
-+
-+                  ast_clear_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
-+                  break;
-+               }
-+
-+               if (s_timeout < ast_tvnow().tv_sec)
-+                  break;
-+
-+               usleep(100000);
-+            }
++         {
++            // Thread create with success, it is not necessary to send a event reply
++            if (option_verbose >= 3)
++                 ast_verbose(VERBOSE_PREFIX_3 "receive_fax thread created for |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
++            return;
 +         }
 +      }
 +      else // error file missing
@@ -544,22 +769,210 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         trs_reply.body.error_value = FILE_NOT_FOUND;
 +      }
 +   }
++
++   chan_vars->fax.enabled = FALSE;
++   //Something wrong happen, send a event with error
++   asteriskSendReply(&trs_reply, chan_vars);
++   return;
++}
++
++
++/******************************************************************************
++ *        NAME: receive_fax_thread()
++ * DESCRIPTION: thread function, it is necessary to create a new thread because
++ *              pbx_exec blocks the thread. If the main thread is blocked it is
++ *              not possible to interrupt the operation.
++ *              (stop_operation, release_enpoint, ...)
++ *****************************************************************************/
++static void *receive_fax_thread(void *data)
++{
++   char execCmd[FAX_FILENAME_SIZE+10];
++   struct ast_app *app; // AGI RELATED
++   reply_ast trs_reply;
++   int s_error = 0;
++   const char *s_tmp;
++   int s_result = 0;
++   time_t s_timeout;
++   char s_maxbaudrate[8];
++
++   struct ast_channel *chan;
++   ast_vars *chan_vars;
++
++   chan_vars = (ast_vars *) data;
++   chan = chan_vars->chan;
++
++   memset(&trs_reply, 0, sizeof(trs_reply));
++
++   trs_reply.con_id = chan_vars->con_id;
++   trs_reply.cmd_cnt = chan_vars->cmd_cnt;
++   trs_reply.sender = chan_vars->edp_id;
+ 
++   trs_reply.event = RECEIVE_FAX_COMPLETED;
++   trs_reply.error = TRUE;
+ 
++   trs_reply.body.fax_reply.event = RECEIVE_FAX_COMPLETED;      // event returned
++   trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
++   trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
+ 
++   // ->$FAX_FILE->$CSID->#MAX_BAUD->
++   if ((app = pbx_findapp("ReceiveFAX"))) // application found// AGI RELATED
++   {
+ 
++      snprintf(execCmd, sizeof(execCmd), "%s,dfzs", chan_vars->fax.fax_file);
+ 
++      if(chan_vars->fax.csid)
++      {
++         ast_func_write(chan, "FAXOPT(LocalStationID)", chan_vars->fax.csid);
++      }
++
++      if (chan_vars->fax.max_baudrate)
++      {
++         sprintf(s_maxbaudrate, "%d",chan_vars->fax.max_baudrate);
++
++         if (option_verbose >= 3)
++                 ast_verbose(VERBOSE_PREFIX_3 "receive_fax maxbaudrate: %s on channel %s\n", s_maxbaudrate, ast_channel_name(chan));
++
++         ast_func_write(chan, "FAXOPT(maxrate)", (const char *)s_maxbaudrate);
++      }
++
++      ast_channel_ref(chan); // when calling a new app is necessary to increase the channel ref
++      s_result = pbx_exec(chan, app, execCmd);
++
++      // check if channel was destroyed
++      if(chan != NULL)
++      {
++         // check if channel was hangup
++         if ((ast_check_hangup(chan) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)))
++         {
++            if (option_verbose >= 3)
++               ast_verbose(VERBOSE_PREFIX_3 "receive_fax: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
++
++            chan_vars->fax.enabled = FALSE;
++            return NULL;
++         }
++      }
++      else
++      {
++         chan_vars->fax.enabled = FALSE;
++         return NULL;
++      }
++
++      if (option_verbose >= 3)
++         ast_verbose(VERBOSE_PREFIX_3 "receive_fax_thread: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
++
++      if(ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
++      {
++         // event changed, maybe a release_enpoind or stop_operation
++         // return without sending an event
++         ast_log(LOG_DEBUG, "receive_fax_thread: Event different from RECEIVE_FAX_COMPLETED on ch %d on channel %s\n",
++               chan_vars->trs_reply.chan_id, ast_channel_name(chan));
++
++         // Clear FAX_TONE_DETECTED flag in case it was activated
++         ast_channel_lock(chan);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
++         ast_channel_unlock(chan);
++
++         chan_vars->fax.enabled = FALSE;
++
++         return NULL;
++      }
++
++      if(s_result != 0)
++      {
++         ast_log(LOG_ERROR, "receive_fax_thread: pbx_exec result: %d\n",s_result);
++
++         ast_channel_lock(chan);
++         if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERROR")))
++         {
++            s_error = fax_error_to_code(s_tmp);
++
++            ast_log(LOG_ERROR, "receive_fax_thread FAXERROR is  s_error: %d\n", s_error);
++
++            trs_reply.body.fax_reply.status = s_error; // FAILED
++            trs_reply.body.error_value = s_error; // FAILED
++         }
++         else
++         {
++            ast_log(LOG_ERROR, "receive_fax_thread FAXERROR is NULL\n");
++            trs_reply.body.fax_reply.status = RESOURCE_ERROR;
++            trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
++         }
++         ast_channel_unlock(chan);
++
++      }
++      else
++      { // wait for phase E callback to return
++
++         s_timeout = ast_tvnow().tv_sec + 30; // wait 30 seconds before timeout
++
++         while(1)
++         {
++            if (ast_test_flag(ast_channel_inoflags(chan), FAX_PHASE_E_EXIT))
++            {
++               ast_channel_lock(chan);
++
++               if(strncmp(pbx_builtin_getvar_helper(chan, "FAXSTATUS"),"SUCCESS",7))
++               {
++                  if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
++                  {
++                     sscanf(s_tmp,"%d", &s_error);
++                     trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
++                     trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
++                  }
++                  else
++                  {
++                     ast_log(LOG_ERROR, "receive_fax_thread FAXERRORVALUE is NULL\n");
++                     trs_reply.body.fax_reply.status = FAX_ERROR_MASK;
++                     trs_reply.body.error_value = FAX_ERROR_MASK; // FAILED
++                  }
++               }
++               else
++               {
++                  trs_reply.body.fax_reply.status = 0; // SUCCESS
++                  trs_reply.error = FALSE;
++               }
++
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXBITRATE")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.speed);
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXRESOLUTION")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.resolution);
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXPAGES")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.pages);
++               if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXTRTOTALSIZE")))
++                  sscanf(s_tmp,"%d",&trs_reply.body.fax_reply.trsize);
++
++               ast_channel_unlock(chan);
++
++               ast_clear_flag(ast_channel_inoflags(chan), FAX_PHASE_E_EXIT);
++               break;
++            }
++
++            if (s_timeout < ast_tvnow().tv_sec)
++               break;
++
++            usleep(100000);
++         }
++      }
++   }
 +   else // application doesn't exist
 +   {
-+      ast_log(LOG_WARNING, "receive_fax: pbx_findapp failed on channel %s\n", ast_channel_name(chan));
++      ast_log(LOG_WARNING, "receive_fax_thread: pbx_findapp failed on channel %s\n", ast_channel_name(chan));
 +      trs_reply.body.error_value = RESOURCE_ERROR;
 +   }
 +
 +   // Clear FAX_TONE_DETECTED flag in case it was activated
 +   ast_channel_lock(chan);
-+   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_DETECTED);
++   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
++   ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
 +   ast_channel_unlock(chan);
 +
++   chan_vars->fax.enabled = FALSE;
 +   // send event
 +   asteriskSendReply(&trs_reply, chan_vars);
 +
++   return NULL;
 +}
- 
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.h asterisk-11.3.0/apps/wms_inoapi.h
 --- asterisk-base-11.3.0/apps/wms_inoapi.h	2013-10-28 10:11:56.043637237 +0000
 +++ asterisk-11.3.0/apps/wms_inoapi.h	2013-11-07 17:06:03.599887265 +0000
@@ -574,7 +987,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  void kill_conference_thread(ast_vars *chan_vars);
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
 --- asterisk-base-11.3.0/channels/chan_sip.c	2013-10-28 10:11:50.967887486 +0000
-+++ asterisk-11.3.0/channels/chan_sip.c	2013-11-07 17:06:03.631887099 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2013-11-13 09:17:42.346046000 +0000
 @@ -6558,7 +6558,7 @@
  	/* T.38 re-INVITE FAX detection should never be done for outgoing calls,
  	 * so ensure it is disabled.
@@ -584,7 +997,22 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	if (p->options->transfer) {
  		char buf[SIPBUFSIZE/2];
-@@ -8839,22 +8839,8 @@
+@@ -8823,14 +8823,12 @@
+ 	struct ast_frame *fr;
+ 	struct sip_pvt *p = ast_channel_tech_pvt(ast);
+ 	int faxdetected = FALSE;
+-
+ 	sip_pvt_lock(p);
+ 	fr = sip_rtp_read(ast, p, &faxdetected);
+ 	p->lastrtprx = time(NULL);
+ 
+ 	/* If we detect a CNG tone and fax detection is enabled then send us off to the fax extension */
+ 	if (faxdetected && ast_test_flag(&p->flags[1], SIP_PAGE2_FAX_DETECT_CNG)) {
+-		if (strcmp(ast_channel_exten(ast), "fax")) {
+ 			const char *target_context = S_OR(ast_channel_macrocontext(ast), ast_channel_context(ast));
+ 			/* We need to unlock 'ast' here because
+ 			 * ast_exists_extension has the potential to start and
+@@ -8839,23 +8837,15 @@
  			 */
  			sip_pvt_unlock(p);
  			ast_channel_unlock(ast);
@@ -604,15 +1032,24 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 -				sip_pvt_lock(p);
 -				ast_log(LOG_NOTICE, "FAX CNG detected but no fax extension\n");
 -			}
-+			ast_verb(2, "Fax CNG detection on channel '%s'\n", ast_channel_name(ast));
-+			ast_set_flag(ast_channel_inoflags(p->owner), FAX_TONE_DETECTED);
- 		}
+-		}
++			ast_verb(2, "Fax detection on channel '%s'\n", ast_channel_name(ast));
++
++		   /* inbound or outbound call ? */
++		   if (ast_test_flag(&p->flags[0], SIP_OUTGOING))  {
++		      ast_set_flag(ast_channel_inoflags(p->owner), FAX_TONE_CED_DETECTED);
++		   } else {
++		      ast_set_flag(ast_channel_inoflags(p->owner), FAX_TONE_CNG_DETECTED);
++		   }
++
  	}
  
-@@ -11117,19 +11103,12 @@
+ 	/* Only allow audio through if they sent progress with SDP, or if the channel is actually answered */
+@@ -11116,22 +11106,16 @@
+ 				/* If fax detection is enabled then send us off to the fax extension */
  				if (ast_test_flag(&p->flags[1], SIP_PAGE2_FAX_DETECT_T38)) {
  					ast_channel_lock(p->owner);
- 					if (strcmp(ast_channel_exten(p->owner), "fax")) {
+-					if (strcmp(ast_channel_exten(p->owner), "fax")) {
 -						const char *target_context = S_OR(ast_channel_macrocontext(p->owner), ast_channel_context(p->owner));
 -						ast_channel_unlock(p->owner);
 -						if (ast_exists_extension(p->owner, target_context, "fax", 1,
@@ -626,16 +1063,22 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 -							ast_log(LOG_NOTICE, "T.38 re-INVITE detected but no fax extension\n");
 -						}
 -					} else {
-+					   ast_verb(2, "Fax T.38 detection on channel '%s'\n", ast_channel_name(p->owner));
+-						ast_channel_unlock(p->owner);
+-					}
++					ast_verb(2, "Fax T.38 detection on channel '%s'\n", ast_channel_name(p->owner));
 +
-+					   ast_set_flag(ast_channel_inoflags(p->owner), FAX_TONE_DETECTED);
-+					   ast_channel_unlock(p->owner);
++					/* inbound or outbound call ? */
++			      if (ast_test_flag(&p->flags[0], SIP_OUTGOING))  {
++			         ast_set_flag(ast_channel_inoflags(p->owner), FAX_TONE_CED_DETECTED);
++			      } else {
++			         ast_set_flag(ast_channel_inoflags(p->owner), FAX_TONE_CNG_DETECTED);
++			      }
 +
-+				   } else {
- 						ast_channel_unlock(p->owner);
- 					}
++					ast_channel_unlock(p->owner);
  				}
-@@ -11143,7 +11122,6 @@
+ 			}
+ 		} else {
+@@ -11143,7 +11127,6 @@
  	}
  
  	if ((portno == -1) && (p->t38.state != T38_DISABLED) && (p->t38.state != T38_REJECTED)) {
@@ -645,12 +1088,14 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	}
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
 --- asterisk-base-11.3.0/include/asterisk/channel.h	2013-10-28 10:11:52.271637251 +0000
-+++ asterisk-11.3.0/include/asterisk/channel.h	2013-11-07 17:06:03.659887157 +0000
-@@ -186,6 +186,8 @@
++++ asterisk-11.3.0/include/asterisk/channel.h	2013-11-14 08:48:55.659068000 +0000
+@@ -186,6 +186,10 @@
  #define MEETME_KICK_LAST      (1 << 12)
  #define MEETME_DO_RECORD      (1 << 13)
  
-+#define FAX_TONE_DETECTED     (1 << 14)
++#define FAX_TONE_CED_DETECTED (1 << 14)
++#define FAX_TONE_CNG_DETECTED (1 << 15)
++#define FAX_PHASE_E_EXIT      (1 << 16)
 +
  #define EXEC_APP_EXIT         (1 << 17)
  #define SIP_GOT_REINVITE      (1 << 18)
@@ -669,8 +1114,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		/*! dontuse dummy variable - do not ever use */	
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
 --- asterisk-base-11.3.0/res/res_fax.c	2013-10-28 10:12:18.935637193 +0000
-+++ asterisk-11.3.0/res/res_fax.c	2013-11-07 17:06:03.679887109 +0000
-@@ -1141,31 +1141,34 @@
++++ asterisk-11.3.0/res/res_fax.c	2013-11-14 10:17:04.435534000 +0000
+@@ -1141,31 +1141,33 @@
  static int report_fax_status(struct ast_channel *chan, struct ast_fax_session_details *details, const char *status)
  {
  	char *filenames = generate_filenames_string(details, "FileName: ", "\r\n");
@@ -687,8 +1132,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +	   }
 +
 +	   get_manager_event_info(chan, &info);
-+	   if(s_chid)
-+	   {
++	   if (s_chid) {
 +	      manager_event(EVENT_FLAG_CALL,
  			      "FAXStatus",
  			      "Operation: %s\r\n"
@@ -716,7 +1160,46 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	}
  	ast_channel_unlock(chan);
  
-@@ -1745,6 +1748,7 @@
+@@ -1416,7 +1418,21 @@
+ 		struct ast_channel *ready_chan;
+ 		int ofd, exception;
+ 
+-		ms = 1000;
++		if ((ast_check_hangup(chan) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)))
++          return chancount;
++
++	   if (ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT)) {
++
++	      ast_verb(3, "FAX Exit flag activated, session stopped\n");
++
++         c = NULL;
++         chancount = 0;
++         fax->tech->cancel_session(fax);
++
++         return chancount;
++	   }
++
++	   ms = 1000;
+ 		errno = 0;
+ 		ready_chan = ast_waitfor_nandfds(&c, chancount, &fax->fd, 1, &exception, &ofd, &ms);
+ 		if (ready_chan) {
+@@ -1590,7 +1606,6 @@
+ 		start = ast_tvnow();
+ 		while ((ms = ast_remaining_ms(start, timeout_ms))) {
+ 			ms = ast_waitfor(chan, ms);
+-
+ 			if (ms < 0) {
+ 				ast_log(LOG_ERROR, "error while generating CED tone on %s\n", ast_channel_name(chan));
+ 				ast_playtones_stop(chan);
+@@ -1659,7 +1674,6 @@
+ 	start = ast_tvnow();
+ 	while ((ms = ast_remaining_ms(start, timeout_ms))) {
+ 		int break_loop = 0;
+-
+ 		ms = ast_waitfor(chan, ms);
+ 		if (ms < 0) {
+ 			ast_log(LOG_WARNING, "error on '%s' while waiting for T.38 negotiation.\n", ast_channel_name(chan));
+@@ -1745,6 +1759,7 @@
  	struct ast_flags opts = { 0, };
  	struct manager_event_info info;
  	enum ast_t38_state t38state;
@@ -724,7 +1207,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	/* initialize output channel variables */
  	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
-@@ -1768,7 +1772,7 @@
+@@ -1768,7 +1783,7 @@
  	set_channel_variables(chan, details);
  
  	if (details->gateway_id > 0) {
@@ -733,7 +1216,17 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		set_channel_variables(chan, details);
  		ast_log(LOG_ERROR, "executing ReceiveFAX on a channel with a T.38 Gateway is not supported\n");
  		ao2_ref(details, -1);
-@@ -1942,29 +1946,32 @@
+@@ -1933,6 +1948,9 @@
+ 		ast_atomic_fetchadd_int(&faxregistry.fax_failures, 1);
+ 	}
+ 
++   if ((ast_check_hangup(chan) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)))
++      return (!channel_alive) ? -1 : 0;
++
+ 	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+ 		if (disable_t38(chan)) {
+ 			ast_debug(1, "error disabling T.38 mode on %s\n", ast_channel_name(chan));
+@@ -1942,29 +1960,32 @@
  	/* send out the AMI completion event */
  	ast_channel_lock(chan);
  
@@ -775,7 +1268,31 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	ast_channel_unlock(chan);
  
  	ao2_ref(s, -1);
-@@ -2231,6 +2238,7 @@
+@@ -2002,7 +2023,6 @@
+ 	while ((ms = ast_remaining_ms(start, timeout_ms))) {
+ 		int break_loop = 0;
+ 		ms = ast_waitfor(chan, ms);
+-
+ 		if (ms < 0) {
+ 			ast_log(LOG_ERROR, "error while generating CNG tone on %s\n", ast_channel_name(chan));
+ 			ast_playtones_stop(chan);
+@@ -2074,7 +2094,6 @@
+ 		start = ast_tvnow();
+ 		while ((ms = ast_remaining_ms(start, timeout_ms))) {
+ 			int break_loop = 0;
+-
+ 			ms = ast_waitfor(chan, ms);
+ 			if (ms < 0) {
+ 				ast_log(LOG_WARNING, "error on '%s' while waiting for T.38 negotiation.\n", ast_channel_name(chan));
+@@ -2144,7 +2163,6 @@
+ 			start = ast_tvnow();
+ 			while ((ms = ast_remaining_ms(start, timeout_ms))) {
+ 				int break_loop = 0;
+-
+ 				ms = ast_waitfor(chan, ms);
+ 				if (ms < 0) {
+ 					ast_log(LOG_ERROR, "error while generating second CNG tone on %s\n", ast_channel_name(chan));
+@@ -2231,6 +2249,7 @@
  	struct ast_flags opts = { 0, };
  	struct manager_event_info info;
  	enum ast_t38_state t38state;
@@ -783,7 +1300,17 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	/* initialize output channel variables */
  	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
-@@ -2458,29 +2466,33 @@
+@@ -2443,6 +2462,9 @@
+ 		ast_atomic_fetchadd_int(&faxregistry.fax_failures, 1);
+ 	}
+ 
++   if ((ast_check_hangup(chan) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)))
++      return (!channel_alive) ? -1 : 0;
++
+ 	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+ 		if (disable_t38(chan)) {
+ 			ast_debug(1, "error disabling T.38 mode on %s\n", ast_channel_name(chan));
+@@ -2458,29 +2480,33 @@
  
  	/* send out the AMI completion event */
  	ast_channel_lock(chan);
@@ -826,9 +1353,17 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	ast_channel_unlock(chan);
  
  	ast_free(filenames);
+@@ -3757,7 +3783,6 @@
+ 	i = ao2_iterator_init(faxregistry.container, 0);
+ 	while ((s = ao2_iterator_next(&i))) {
+ 		ao2_lock(s);
+-
+ 		filenames = generate_filenames_string(s->details, "", ", ");
+ 
+ 		ast_cli(a->fd, "%-20.20s %-10.10s %-10d %-5.5s %-10.10s %-15.15s %-30s\n",
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
 --- asterisk-base-11.3.0/res/res_fax_spandsp.c	2013-10-28 10:12:20.515637164 +0000
-+++ asterisk-11.3.0/res/res_fax_spandsp.c	2013-11-07 17:07:42.255384000 +0000
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2013-11-12 11:16:10.094749000 +0000
 @@ -66,6 +66,9 @@
  #include "asterisk/res_fax.h"
  #include "asterisk/channel.h"
@@ -1085,7 +1620,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                       s_chid
 +                       );
 +   }
-+   ast_set_flag(ast_channel_inoflags(s->chan), EXEC_APP_EXIT);
++   ast_set_flag(ast_channel_inoflags(s->chan), FAX_PHASE_E_EXIT);
  }
  
  /*! \brief Send spandsp log messages to asterisk.
