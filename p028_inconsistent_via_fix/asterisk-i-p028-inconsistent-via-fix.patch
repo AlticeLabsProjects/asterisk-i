@@ -1,0 +1,13 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-11-13 09:17:42.346046000 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2013-11-14 17:04:20.792142427 +0000
+@@ -11949,6 +11949,9 @@
+ 			if (others)
+ 			    *others++ = '\0';
+ 
++                        /*check if the string already has ';' in the end*/
++                        if (leftmost[strlen(leftmost)-1] == ';')
++                           leftmost[strlen(leftmost)-1] = '\0';
+ 			/* Find ;rport;  (empty request) */
+ 			rport = strstr(leftmost, ";rport");
+ 			if (rport && *(rport+6) == '=')
