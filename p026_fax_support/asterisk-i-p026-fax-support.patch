@@ -178,7 +178,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
              if (option_verbose >= 3)
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.h asterisk-11.3.0/apps/app_wms.h
 --- asterisk-base-11.3.0/apps/app_wms.h	2013-10-28 10:11:56.055637000 +0000
-+++ asterisk-11.3.0/apps/app_wms.h	2013-11-18 14:14:20.075887017 +0000
++++ asterisk-11.3.0/apps/app_wms.h	2013-11-11 16:23:20.058375000 +0000
 @@ -65,6 +65,9 @@
     asr_struct asr;
  	reply_ast trs_reply;
@@ -209,7 +209,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
 --- asterisk-base-11.3.0/apps/vsrvdefs.h	2013-10-28 10:11:56.067637000 +0000
-+++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-18 14:14:25.091637180 +0000
++++ asterisk-11.3.0/apps/vsrvdefs.h	2013-11-12 14:25:49.453350000 +0000
 @@ -56,6 +56,18 @@
  /* Conference_event */
  #define USER_EXITED_CONFERENCE   0
@@ -311,7 +311,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.h asterisk-11.3.0/apps/wms_aux.h
 --- asterisk-base-11.3.0/apps/wms_aux.h	2013-10-28 10:11:56.043637000 +0000
-+++ asterisk-11.3.0/apps/wms_aux.h	2013-11-18 14:14:30.095714876 +0000
++++ asterisk-11.3.0/apps/wms_aux.h	2013-11-07 17:06:03.591897000 +0000
 @@ -44,5 +44,6 @@
  void post_error(cmd_ast trs_cmd, ast_vars *chan_vars, int event, int error);
  void send_asr(struct ast_frame *, ast_vars *);
@@ -321,7 +321,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  #endif
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2013-10-28 10:11:56.059637000 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-18 14:14:35.099806989 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2013-11-18 15:43:48.007754000 +0000
 @@ -80,6 +80,8 @@
   *  
   ******************************************************************************/
@@ -383,7 +383,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
     // stop play announcement in conference
     if (chan_vars->conference.id) 
     {
-@@ -1409,8 +1430,592 @@
+@@ -1409,8 +1430,595 @@
  }
  
  
@@ -541,6 +541,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +      ast_channel_ref(chan); // when calling a new app is necessary to increase the channel ref
 +      s_result = pbx_exec(chan, app, execCmd);
 +      ast_channel_unref(chan);
++
++      if (option_verbose >= 3)
++         ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Exiting SendFax on channel %s\n", ast_channel_name(chan));
 +
 +      if(ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
 +      {
@@ -805,10 +808,10 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   trs_reply.con_id = chan_vars->con_id;
 +   trs_reply.cmd_cnt = chan_vars->cmd_cnt;
 +   trs_reply.sender = chan_vars->edp_id;
-+
+ 
 +   trs_reply.event = RECEIVE_FAX_COMPLETED;
 +   trs_reply.error = TRUE;
-+
+ 
 +   trs_reply.body.fax_reply.event = RECEIVE_FAX_COMPLETED;      // event returned
 +   trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
 +   trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
@@ -816,9 +819,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   // ->$FAX_FILE->$CSID->#MAX_BAUD->
 +   if ((app = pbx_findapp("ReceiveFAX"))) // application found// AGI RELATED
 +   {
-+
+ 
 +      snprintf(execCmd, sizeof(execCmd), "%s,dfzs", chan_vars->fax.fax_file);
-+
+ 
 +      if(chan_vars->fax.csid)
 +      {
 +         ast_func_write(chan, "FAXOPT(LocalStationID)", chan_vars->fax.csid);
@@ -853,9 +856,9 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
 +         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
 +         ast_channel_unlock(chan);
- 
++
 +         chan_vars->fax.enabled = FALSE;
- 
++
 +         return NULL;
 +      }
 +
@@ -866,7 +869,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         ast_channel_lock(chan);
 +         if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERROR")))
 +         {
- 
++
 +            if((s_tmp2 = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
 +            {
 +               sscanf(s_tmp2,"%d", &s_error);
@@ -892,7 +895,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +            trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
 +         }
 +         ast_channel_unlock(chan);
- 
++
 +      }
 +      else
 +      { // wait for phase E callback to return
