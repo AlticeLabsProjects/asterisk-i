@@ -1,0 +1,27 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2013-12-12 14:09:40.708387334 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2014-01-13 12:54:16.482357229 +0000
+@@ -15275,6 +15275,10 @@
+ 	   add_header(req, "P-Preferred-Identity", p->p_preferred_id);
+ 	if(!ast_strlen_zero(p->p_privacy_id))
+ 	   add_header(req, "Privacy", p->p_privacy_id);
++        else if(p->owner)
++           if(!ast_strlen_zero(ast_channel_cid_privacy(p->owner)))
++              add_header(req, "Privacy", ast_channel_cid_privacy(p->owner));
++
+ 	for (i = 0; i < extra_headers; i++)
+ 	{
+ 	   add_header(req, header_name[i], header_field[i]);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2013-12-12 14:10:17.267637015 +0000
++++ asterisk-11.3.0/main/channel.c	2014-01-13 12:55:14.690104807 +0000
+@@ -5733,6 +5733,9 @@
+ 	   }
+ 	   ast_channel_extradata_set(chan, origparm->extradata);
+ 
++           if(origparm->privacy == 1)
++              ast_channel_cid_privacy_set(chan, "id");
++
+ 	   temp_smra_attrib.rtpa_port = origparm->rtpa_port;
+ 	   temp_smra_attrib.rtpv_port = origparm->rtpv_port;
+ 	   ast_copy_string(temp_smra_attrib.rtpa_ip, origparm->rtpa_ip, sizeof(temp_smra_attrib.rtpa_ip));
