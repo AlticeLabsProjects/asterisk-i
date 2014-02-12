@@ -1,0 +1,15 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-02-12 14:22:09.994104706 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-02-12 14:30:51.812552000 +0000
+@@ -1058,6 +1058,11 @@
+             build_terminator(chan, chan_vars, trs_cmd);
+ 			   return;
+ 		   }
++         else
++         {
++            post_error(trs_cmd, chan_vars, ret_evt, INVALID_VOICE_FILE_PARAMETER);
++            return;
++         }
+       }
+ 	}
+ }
