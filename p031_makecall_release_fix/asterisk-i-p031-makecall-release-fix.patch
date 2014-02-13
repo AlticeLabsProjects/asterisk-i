@@ -1,0 +1,23 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/manager.c asterisk-11.3.0/main/manager.c
+--- asterisk-base-11.3.0/main/manager.c	2014-02-13 13:53:44.273854520 +0000
++++ asterisk-11.3.0/main/manager.c	2014-02-13 13:59:03.265361000 +0000
+@@ -4069,12 +4069,13 @@
+ 	struct ast_channel *chan = NULL, *chans[1];
+ 	char requested_channel[AST_CHANNEL_NAME];
+ 
+-       //int len = strlen(in->data);
+-       //char *str = in->data + len + 1;
+-
+-       //if (len < 200) {
+-       //   sprintf(str, in->idtext);
+-       //}
++   /* Append in->idtext (ActionID) to in->data in order to send the OriginateChannel event
++   with the ActionID. This value will be retrieved in the ast_request function in file channel.c */
++   int len = strlen(in->data);
++   char *str = in->data + len + 1;
++   if (len < 200) {
++      sprintf(str, in->idtext);
++   }
+ 
+ 	if (!ast_strlen_zero(in->app)) {
+ 		res = ast_pbx_outgoing_app(in->tech, in->cap, in->data,
