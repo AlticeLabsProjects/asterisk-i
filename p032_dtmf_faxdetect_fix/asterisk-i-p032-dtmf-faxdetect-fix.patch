@@ -1,0 +1,30 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/dsp.c asterisk-11.3.0/main/dsp.c
+--- asterisk-base-11.3.0/main/dsp.c	2014-02-18 11:34:28.878189850 +0000
++++ asterisk-11.3.0/main/dsp.c	2014-02-18 11:37:35.151093000 +0000
+@@ -1527,7 +1527,7 @@
+ 		}
+ 	}
+ 
+-	if (dsp->features & (DSP_FEATURE_DIGIT_DETECT | DSP_FEATURE_BUSY_DETECT)) {
++	if (dsp->features & (DSP_FEATURE_DIGIT_DETECT | DSP_FEATURE_FAX_DETECT | DSP_FEATURE_BUSY_DETECT)) {
+ 		if (dsp->digitmode & DSP_DIGITMODE_MF) {
+ 			digit = mf_detect(dsp, &dsp->digit_state, shortdata, len, (dsp->digitmode & DSP_DIGITMODE_NOQUELCH) == 0, (dsp->digitmode & DSP_DIGITMODE_RELAXDTMF));
+ 		} else {
+@@ -1541,7 +1541,7 @@
+ 			if (!dsp->dtmf_began) {
+ 				/* We have not reported DTMF_BEGIN for anything yet */
+ 
+-				if (dsp->features & DSP_FEATURE_DIGIT_DETECT) {
++				if (dsp->features & DSP_FEATURE_DIGIT_DETECT | DSP_FEATURE_FAX_DETECT) {
+ 					event = AST_FRAME_DTMF_BEGIN;
+ 					event_digit = dsp->digit_state.digits[0];
+ 				}
+@@ -1549,7 +1549,7 @@
+ 
+ 			} else if (dsp->digit_state.current_digits > 1 || digit != dsp->digit_state.digits[0]) {
+ 				/* Digit changed. This means digit we have reported with DTMF_BEGIN ended */
+-				if (dsp->features & DSP_FEATURE_DIGIT_DETECT) {
++				if (dsp->features & DSP_FEATURE_DIGIT_DETECT | DSP_FEATURE_FAX_DETECT) {
+ 					event = AST_FRAME_DTMF_END;
+ 					event_digit = dsp->digit_state.digits[0];
+ 					event_len = dsp->digit_state.digitlen[0] * 1000 / dsp->sample_rate;
