@@ -34,7 +34,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
   *
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
 --- asterisk-base-11.3.0/main/channel.c	2014-03-03 12:17:15.614604815 +0000
-+++ asterisk-11.3.0/main/channel.c	2014-03-03 12:27:20.701999000 +0000
++++ asterisk-11.3.0/main/channel.c	2014-03-03 14:17:02.353948000 +0000
 @@ -5652,7 +5652,7 @@
  	return new_chan;
  }
@@ -59,7 +59,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 +struct ast_channel *__ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr, int timeout, int *outstate, const char *cid_num, const char *cid_name, struct outgoing_helper *oh, struct originate_params *origparm)
 +{
-+   return __ast_request_and_dial(type, cap, requestor, addr, timeout, outstate, cid_num, cid_name, oh, origparm, NULL);
++   return ___ast_request_and_dial(type, cap, requestor, addr, timeout, outstate, cid_num, cid_name, oh, origparm, NULL);
 +}
 +
  struct ast_channel *ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr, int timeout, int *outstate, const char *cidnum, const char *cidname)
