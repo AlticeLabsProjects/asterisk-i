@@ -1,7 +1,115 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-03-03 12:16:25.746104888 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-03-03 12:27:00.390410000 +0000
+@@ -1363,6 +1363,8 @@
+  */
+ struct ast_channel *ast_request(const char *type, struct ast_format_cap *request_cap, const struct ast_channel *requestor, const char *addr, int *cause);
+ 
++struct ast_channel *_ast_request(const char *type, struct ast_format_cap *request_cap, const struct ast_channel *requestor, const char *addr, int *cause, const char *idtext);
++
+ /*!
+  * \brief Request a channel of a given type, with data as optional information used
+  *        by the low level module and attempt to place a call on it
+@@ -1400,6 +1402,9 @@
+ struct ast_channel *__ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr,
+ 	int timeout, int *reason, const char *cid_num, const char *cid_name, struct outgoing_helper *oh, struct originate_params *origparm);
+ 
++struct ast_channel *___ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr,
++   int timeout, int *reason, const char *cid_num, const char *cid_name, struct outgoing_helper *oh, struct originate_params *origparm, const char *idtext);
++
+ /*!
+  * \brief Forwards a call to a new channel specified by the original channel's call_forward str.  If possible, the new forwarded channel is created and returned while the original one is terminated.
+  * \param caller in channel that requested orig
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/pbx.h asterisk-11.3.0/include/asterisk/pbx.h
+--- asterisk-base-11.3.0/include/asterisk/pbx.h	2014-03-03 12:16:25.734104602 +0000
++++ asterisk-11.3.0/include/asterisk/pbx.h	2014-03-03 12:23:01.041395000 +0000
+@@ -1080,6 +1080,8 @@
+    particular application with given extension */
+ int ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const char *addr, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel, struct originate_params *origparm);
+ 
++int _ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const char *addr, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel, struct originate_params *origparm, const char *idtext);
++
+ /*!
+  * \brief Evaluate a condition
+  *
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2014-03-03 12:17:15.614604815 +0000
++++ asterisk-11.3.0/main/channel.c	2014-03-03 12:27:20.701999000 +0000
+@@ -5652,7 +5652,7 @@
+ 	return new_chan;
+ }
+ 
+-struct ast_channel *__ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr, int timeout, int *outstate, const char *cid_num, const char *cid_name, struct outgoing_helper *oh, struct originate_params *origparm)
++struct ast_channel *___ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr, int timeout, int *outstate, const char *cid_num, const char *cid_name, struct outgoing_helper *oh, struct originate_params *origparm, const char *idtext)
+ {
+ 	int dummy_outstate;
+ 	int cause = 0;
+@@ -5667,7 +5667,7 @@
+ 	else
+ 		outstate = &dummy_outstate;	/* make outstate always a valid pointer */
+ 
+-	chan = ast_request(type, cap, requestor, addr, &cause);
++	chan = _ast_request(type, cap, requestor, addr, &cause, idtext);
+ 	if (!chan) {
+ 		ast_log(LOG_NOTICE, "Unable to request channel %s/%s\n", type, addr);
+ 		handle_cause(cause, outstate);
+@@ -5880,6 +5880,11 @@
+ 	return chan;
+ }
+ 
++struct ast_channel *__ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr, int timeout, int *outstate, const char *cid_num, const char *cid_name, struct outgoing_helper *oh, struct originate_params *origparm)
++{
++   return __ast_request_and_dial(type, cap, requestor, addr, timeout, outstate, cid_num, cid_name, oh, origparm, NULL);
++}
++
+ struct ast_channel *ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr, int timeout, int *outstate, const char *cidnum, const char *cidname)
+ {
+ 	return __ast_request_and_dial(type, cap, requestor, addr, timeout, outstate, cidnum, cidname, NULL, NULL);
+@@ -5925,7 +5930,7 @@
+ 	return 0;
+ }
+ 
+-struct ast_channel *ast_request(const char *type, struct ast_format_cap *request_cap, const struct ast_channel *requestor, const char *addr, int *cause)
++struct ast_channel *_ast_request(const char *type, struct ast_format_cap *request_cap, const struct ast_channel *requestor, const char *addr, int *cause, const char *idtext)
+ {
+ 	struct chanlist *chan;
+ 	struct ast_channel *c;
+@@ -5987,17 +5992,13 @@
+ 			return NULL;
+ 		}
+ 
+-		char *str = (char *)addr;
+-		int len = strlen(str);
+-		str += len + 1;
+-
+-		if (strstr(str, "ActionID: "))
++		if (idtext)
+ 		{
+ 		   manager_event(EVENT_FLAG_CALL, "OriginateChannel",
+ 		         "Channel: %s\r\n"
+ 		         "%s"
+ 		         "Uniqueid: %s\r\n",
+-		         ast_channel_name(c), str,
++		         ast_channel_name(c), idtext,
+ 		         ast_channel_uniqueid(c));
+ 		}
+ 
+@@ -6030,6 +6031,11 @@
+ 	return NULL;
+ }
+ 
++struct ast_channel *ast_request(const char *type, struct ast_format_cap *request_cap, const struct ast_channel *requestor, const char *addr, int *cause)
++{
++   return _ast_request(type, request_cap, requestor, addr, cause, NULL);
++}
++
+ int ast_pre_call(struct ast_channel *chan, const char *sub_args)
+ {
+ 	int (*pre_call)(struct ast_channel *chan, const char *sub_args);
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/manager.c asterisk-11.3.0/main/manager.c
---- asterisk-base-11.3.0/main/manager.c	2014-02-13 13:53:44.273854520 +0000
-+++ asterisk-11.3.0/main/manager.c	2014-02-13 13:59:03.265361000 +0000
-@@ -4069,12 +4069,13 @@
+--- asterisk-base-11.3.0/main/manager.c	2014-03-03 12:17:15.590604506 +0000
++++ asterisk-11.3.0/main/manager.c	2014-03-03 12:21:09.502880000 +0000
+@@ -4069,19 +4069,12 @@
  	struct ast_channel *chan = NULL, *chans[1];
  	char requested_channel[AST_CHANNEL_NAME];
  
@@ -11,13 +119,48 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 -       //if (len < 200) {
 -       //   sprintf(str, in->idtext);
 -       //}
-+   /* Append in->idtext (ActionID) to in->data in order to send the OriginateChannel event
-+   with the ActionID. This value will be retrieved in the ast_request function in file channel.c */
-+   int len = strlen(in->data);
-+   char *str = in->data + len + 1;
-+   if (len < 200) {
-+      sprintf(str, in->idtext);
-+   }
- 
+-
  	if (!ast_strlen_zero(in->app)) {
- 		res = ast_pbx_outgoing_app(in->tech, in->cap, in->data,
+-		res = ast_pbx_outgoing_app(in->tech, in->cap, in->data,
++		res = _ast_pbx_outgoing_app(in->tech, in->cap, in->data,
+ 			in->timeout, in->app, in->appdata, &reason, 1,
+ 			S_OR(in->cid_num, NULL),
+ 			S_OR(in->cid_name, NULL),
+-			in->vars, in->account, &chan, &in->orig_extra);
++			in->vars, in->account, &chan, &in->orig_extra, in->idtext);
+ 	} else {
+ 		res = ast_pbx_outgoing_exten(in->tech, in->cap, in->data,
+ 			in->timeout, in->context, in->exten, in->priority, &reason, 1,
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/pbx.c asterisk-11.3.0/main/pbx.c
+--- asterisk-base-11.3.0/main/pbx.c	2014-03-03 12:17:15.562604145 +0000
++++ asterisk-11.3.0/main/pbx.c	2014-03-03 12:23:21.542985000 +0000
+@@ -10305,7 +10305,7 @@
+ 	return NULL;
+ }
+ 
+-int ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const char *addr, int timeout, const char *app, const char *appdata, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel, struct originate_params *extradata)
++int _ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const char *addr, int timeout, const char *app, const char *appdata, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel, struct originate_params *extradata, const char *idtext)
+ {
+ 	struct ast_channel *chan;
+ 	struct app_tmp *tmp;
+@@ -10328,7 +10328,7 @@
+ 		goto outgoing_app_cleanup;
+ 	}
+ 	if (synchronous) {
+-		chan = __ast_request_and_dial(type, cap, NULL, addr, timeout, reason, cid_num, cid_name, &oh, extradata);
++		chan = ___ast_request_and_dial(type, cap, NULL, addr, timeout, reason, cid_num, cid_name, &oh, extradata, idtext);
+ 		if (chan) {
+ 			/* Bind the newly created callid to the channel if it doesn't already have one on creation */
+ 			struct ast_callid *channel_callid = ast_channel_callid(chan);
+@@ -10456,6 +10456,11 @@
+ 	return res;
+ }
+ 
++int ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const char *addr, int timeout, const char *app, const char *appdata, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel, struct originate_params *extradata)
++{
++   return _ast_pbx_outgoing_app(type, cap, addr, timeout, app, appdata, reason, synchronous, cid_num, cid_name, vars, account, locked_channel, extradata, NULL);
++}
++
+ /* this is the guts of destroying a context --
+    freeing up the structure, traversing and destroying the
+    extensions, switches, ignorepats, includes, etc. etc. */
