@@ -1,0 +1,114 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2014-03-03 12:15:56.106604000 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2014-03-06 17:37:53.677046000 +0000
+@@ -592,6 +592,7 @@
+    int nbytes = 0;
+    int s_fax_tone_detected = 0;
+    reply_ast trs_reply;
++   time_t s_timeout = 0;
+ 
+    tempcs[0] = chan;
+    numcs = 1;
+@@ -645,6 +646,23 @@
+          chan_vars->early_media = ast_tvnow();
+       }
+ 
++      if(ast_test_flag(ast_channel_inoflags(chan), FAX_HANGUP))
++      {
++         if(s_timeout == 0)
++            s_timeout = ast_tvnow().tv_sec + 30; // wait 30 seconds before timeout
++
++         if(chan_vars->fax.enabled == FALSE || ast_tvnow().tv_sec > s_timeout)
++         {
++            if (option_verbose >= 3)
++               ast_verbose(VERBOSE_PREFIX_3 "FAX Hangup on channel %s\n", ast_channel_name(chan));
++
++            ast_channel_lock(chan);
++            ast_clear_flag(ast_channel_inoflags(chan), FAX_ACTIVE);
++            ast_channel_unlock(chan);
++            ast_queue_hangup(chan);
++         }
++      }
++
+       if(chan_vars->fax.enabled == FALSE)
+       {
+          if (ast_test_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED))
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-03-03 12:27:00.390410000 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-03-06 17:14:38.528346000 +0000
+@@ -193,6 +193,9 @@
+ #define EXEC_APP_EXIT         (1 << 17)
+ #define SIP_GOT_REINVITE      (1 << 18)
+ 
++#define FAX_ACTIVE            (1 << 19)
++#define FAX_HANGUP            (1 << 20)
++
+ enum ast_bridge_result {
+ 	AST_BRIDGE_COMPLETE = 0,
+ 	AST_BRIDGE_FAILED = -1,
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2014-03-03 14:17:02.353948000 +0000
++++ asterisk-11.3.0/main/channel.c	2014-03-06 17:20:23.334870000 +0000
+@@ -1370,24 +1370,34 @@
+ int ast_queue_hangup(struct ast_channel *chan)
+ {
+ 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_HANGUP };
+-	int res;
+-
+-	/* Yeah, let's not change a lock-critical value without locking */
+-	ast_channel_lock(chan);
+-	ast_channel_softhangup_internal_flag_add(chan, AST_SOFTHANGUP_DEV);
+-	/*** DOCUMENTATION
+-		<managerEventInstance>
+-			<synopsis>Raised when a hangup is requested with no set cause.</synopsis>
+-		</managerEventInstance>
+-	***/
+-	manager_event(EVENT_FLAG_CALL, "HangupRequest",
+-		"Channel: %s\r\n"
+-		"Uniqueid: %s\r\n",
+-		ast_channel_name(chan),
+-		ast_channel_uniqueid(chan));
++	int res = 0;
++   if(ast_test_flag(ast_channel_inoflags(chan), FAX_ACTIVE))
++   {
++      ast_log(LOG_DEBUG, "HangupRequest with fax active \n");
++      ast_set_flag(ast_channel_inoflags(chan), FAX_HANGUP);
++   }
++   else
++   {
++      ast_log(LOG_DEBUG, "HangupRequest with no set cause and fax inactive \n");
++
++      /* Yeah, let's not change a lock-critical value without locking */
++      ast_channel_lock(chan);
++      ast_channel_softhangup_internal_flag_add(chan, AST_SOFTHANGUP_DEV);
++      /*** DOCUMENTATION
++         <managerEventInstance>
++            <synopsis>Raised when a hangup is requested with no set cause.</synopsis>
++         </managerEventInstance>
++      ***/
++      manager_event(EVENT_FLAG_CALL, "HangupRequest",
++         "Channel: %s\r\n"
++         "Uniqueid: %s\r\n",
++         ast_channel_name(chan),
++         ast_channel_uniqueid(chan));
++
++      res = ast_queue_frame(chan, &f);
++      ast_channel_unlock(chan);
++   }
+ 
+-	res = ast_queue_frame(chan, &f);
+-	ast_channel_unlock(chan);
+ 	return res;
+ }
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-03-03 12:15:56.210604000 +0000
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-03-06 17:19:05.191850000 +0000
+@@ -364,6 +364,7 @@
+    // 128 is the spandsp ok completion code for phase b when sending
+    if (completion_code == T30_ERR_OK || completion_code == 131 || completion_code == 128) {
+       ast_string_field_set(s->details, resultstr, "");
++      ast_set_flag(ast_channel_inoflags(s->chan), FAX_ACTIVE);
+    } else {
+       ast_string_field_set(s->details, resultstr, t30_completion_code_to_str(completion_code));
+       s_result = completion_code;
