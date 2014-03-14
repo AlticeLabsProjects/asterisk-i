@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
---- asterisk-base-11.3.0/apps/app_wms.c	2014-03-03 12:15:56.106604000 +0000
-+++ asterisk-11.3.0/apps/app_wms.c	2014-03-06 17:37:53.677046000 +0000
+--- asterisk-base-11.3.0/apps/app_wms.c	2014-03-14 09:48:03.123810308 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2014-03-14 09:53:06.128060425 +0000
 @@ -592,6 +592,7 @@
     int nbytes = 0;
     int s_fax_tone_detected = 0;
@@ -33,9 +33,22 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
        if(chan_vars->fax.enabled == FALSE)
        {
           if (ast_test_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED))
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-03-14 09:48:01.507820904 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2014-03-14 10:03:05.917199000 +0000
+@@ -7909,7 +7909,8 @@
+ 			change_t38_state(p, T38_REJECTED);
+ 			transmit_response_reliable(p, "488 Not acceptable here", &p->initreq);
+ 		} else if (p->t38.state == T38_ENABLED)
+-			transmit_reinvite_with_sdp(p, FALSE, FALSE);
++		   if(ast_test_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED))
++		      transmit_reinvite_with_sdp(p, FALSE, FALSE);
+ 		break;
+ 	case AST_T38_REQUEST_PARMS: {		/* Application wants remote's parameters re-sent */
+ 		struct ast_control_t38_parameters parameters = p->t38.their_parms;
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
---- asterisk-base-11.3.0/include/asterisk/channel.h	2014-03-03 12:27:00.390410000 +0000
-+++ asterisk-11.3.0/include/asterisk/channel.h	2014-03-06 17:14:38.528346000 +0000
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-03-14 09:48:02.759810367 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-03-14 09:53:06.136060346 +0000
 @@ -193,6 +193,9 @@
  #define EXEC_APP_EXIT         (1 << 17)
  #define SIP_GOT_REINVITE      (1 << 18)
@@ -47,8 +60,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	AST_BRIDGE_COMPLETE = 0,
  	AST_BRIDGE_FAILED = -1,
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
---- asterisk-base-11.3.0/main/channel.c	2014-03-03 14:17:02.353948000 +0000
-+++ asterisk-11.3.0/main/channel.c	2014-03-06 17:20:23.334870000 +0000
+--- asterisk-base-11.3.0/main/channel.c	2014-03-14 09:48:39.571810378 +0000
++++ asterisk-11.3.0/main/channel.c	2014-03-14 09:53:06.152060490 +0000
 @@ -1370,24 +1370,34 @@
  int ast_queue_hangup(struct ast_channel *chan)
  {
@@ -102,8 +115,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  }
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
---- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-03-03 12:15:56.210604000 +0000
-+++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-03-06 17:19:05.191850000 +0000
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-03-14 09:48:39.107810522 +0000
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-03-14 09:53:06.160060421 +0000
 @@ -364,6 +364,7 @@
     // 128 is the spandsp ok completion code for phase b when sending
     if (completion_code == T30_ERR_OK || completion_code == 131 || completion_code == 128) {
