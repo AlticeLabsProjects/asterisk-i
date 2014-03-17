@@ -1,0 +1,11 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2014-03-17 16:02:36.356560447 +0000
++++ asterisk-11.3.0/main/channel.c	2014-03-17 16:06:13.198333000 +0000
+@@ -5865,6 +5865,7 @@
+ 		ast_channel_lock(chan);
+ 		if (AST_CONTROL_RINGING == last_subclass) {
+ 			ast_channel_hangupcause_set(chan, AST_CAUSE_NO_ANSWER);
++			*outstate = AST_CAUSE_NO_ANSWER;
+ 		}
+ 		if (!ast_channel_cdr(chan) && (chancdr = ast_cdr_alloc())) {
+ 			ast_channel_cdr_set(chan, chancdr);
