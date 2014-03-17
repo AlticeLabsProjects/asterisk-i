@@ -1,0 +1,90 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-03-17 16:20:51.544560561 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-17 16:26:54.488439000 +0000
+@@ -1621,7 +1621,7 @@
+             if((s_tmp2 = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
+             {
+                sscanf(s_tmp2,"%d", &s_error);
+-               ast_log(LOG_ERROR, "send_fax_thread: FAXERRORVALUE is s_error: %d + FAX_ERROR_MASK: %d\n", s_error, FAX_ERROR_MASK);
++               ast_log(LOG_ERROR, "send_fax_thread: FAXERRORVALUE is %d\n", s_error + FAX_ERROR_MASK);
+                trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
+                trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
+             }
+@@ -1665,7 +1665,7 @@
+                      if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
+                      {
+                         sscanf(s_tmp,"%d", &s_error);
+-                        ast_log(LOG_ERROR, "send_fax_thread: FAXERRORVALUE is s_error: %d + FAX_ERROR_MASK: %d\n", s_error, FAX_ERROR_MASK);
++                        ast_log(LOG_ERROR, "send_fax_thread: FAXERRORVALUE is %d\n", s_error + FAX_ERROR_MASK);
+                         trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
+                         trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
+                      }
+@@ -1921,7 +1921,7 @@
+             if((s_tmp2 = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
+             {
+                sscanf(s_tmp2,"%d", &s_error);
+-               ast_log(LOG_ERROR, "receive_fax_thread: FAXERRORVALUE is s_error: %d + FAX_ERROR_MASK: %d\n", s_error, FAX_ERROR_MASK);
++               ast_log(LOG_ERROR, "receive_fax_thread: FAXERRORVALUE is %d\n", s_error + FAX_ERROR_MASK);
+                trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
+                trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
+             }
+@@ -1963,7 +1963,7 @@
+                      if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
+                      {
+                         sscanf(s_tmp,"%d", &s_error);
+-                        ast_log(LOG_ERROR, "receive_fax_thread: FAXERRORVALUE is s_error: %d + FAX_ERROR_MASK: %d\n", s_error, FAX_ERROR_MASK);
++                        ast_log(LOG_ERROR, "receive_fax_thread: FAXERRORVALUE is %d\n", s_error + FAX_ERROR_MASK);
+                         trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
+                         trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
+                      }
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
+--- asterisk-base-11.3.0/res/res_fax.c	2014-03-17 16:22:21.135810353 +0000
++++ asterisk-11.3.0/res/res_fax.c	2014-03-17 16:30:12.724119000 +0000
+@@ -1634,7 +1634,8 @@
+ 			}
+ 
+ 			if (!(frame = ast_read(chan))) {
+-				ast_log(LOG_ERROR, "error reading frame while generating CED tone on %s\n", ast_channel_name(chan));
++			   if(!ast_check_hangup(chan))
++			      ast_log(LOG_ERROR, "error reading frame while generating CED tone on %s\n", ast_channel_name(chan));
+ 				ast_playtones_stop(chan);
+ 				return -1;
+ 			}
+@@ -1957,6 +1958,13 @@
+ 			ao2_ref(s, -1);
+ 			ao2_ref(details, -1);
+ 			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
++
++         if(ast_check_hangup(chan))
++         {
++            ast_verbose(VERBOSE_PREFIX_3 "FAX Release on channel %s\n", ast_channel_name(chan));
++            ast_set_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
++         }
++
+ 			return -1;
+ 		}
+ 	}
+@@ -2054,7 +2062,8 @@
+ 		}
+ 
+ 		if (!(frame = ast_read(chan))) {
+-			ast_log(LOG_ERROR, "error reading frame while generating CNG tone on %s\n", ast_channel_name(chan));
++		   if(!ast_check_hangup(chan))
++		      ast_log(LOG_ERROR, "error reading frame while generating CNG tone on %s\n", ast_channel_name(chan));
+ 			ast_playtones_stop(chan);
+ 			return -1;
+ 		}
+@@ -2472,6 +2481,13 @@
+ 			ao2_ref(s, -1);
+ 			ao2_ref(details, -1);
+ 			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
++
++         if(ast_check_hangup(chan))
++         {
++            ast_verbose(VERBOSE_PREFIX_3 "FAX Release on channel %s\n", ast_channel_name(chan));
++            ast_set_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
++         }
++
+ 			return -1;
+ 		}
+ 	} else {
