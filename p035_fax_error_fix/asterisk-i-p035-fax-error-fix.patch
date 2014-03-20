@@ -1,7 +1,39 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-03-17 16:20:51.544560561 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-17 16:26:54.488439000 +0000
-@@ -1621,7 +1621,7 @@
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-19 17:06:54.301964000 +0000
+@@ -1593,6 +1593,31 @@
+       if (option_verbose >= 3)
+          ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Exiting SendFax on channel %s\n", ast_channel_name(chan));
+ 
++
++      if(!ast_test_flag(ast_channel_inoflags(chan), FAX_PHASE_B))
++      {
++         // event changed, maybe a release_enpoind or stop_operation
++         // return without sending an event
++         if (option_verbose >= 3)
++            ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Fax didn't reach phase B on channel %s\n", ast_channel_name(chan));
++
++         // Clear FAX_TONE_DETECTED flag in case it was activated
++         ast_channel_lock(chan);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
++         ast_channel_unlock(chan);
++
++         trs_reply.body.fax_reply.status = 0; // SUCCESS
++         trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
++
++         // send event
++         asteriskSendReply(&trs_reply, chan_vars);
++
++         chan_vars->fax.enabled = FALSE;
++
++         return NULL;
++      }
++
+       if(ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
+       {
+          // event changed, maybe a release_enpoind or stop_operation
+@@ -1621,7 +1646,7 @@
              if((s_tmp2 = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
              {
                 sscanf(s_tmp2,"%d", &s_error);
@@ -10,7 +42,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                 trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
                 trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
              }
-@@ -1665,7 +1665,7 @@
+@@ -1665,7 +1690,7 @@
                       if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
                       {
                          sscanf(s_tmp,"%d", &s_error);
@@ -19,7 +51,38 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                          trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
                          trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
                       }
-@@ -1921,7 +1921,7 @@
+@@ -1892,6 +1917,30 @@
+       if (option_verbose >= 3)
+          ast_verbose(VERBOSE_PREFIX_3 "receive_fax_thread: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
+ 
++      if(!ast_test_flag(ast_channel_inoflags(chan), FAX_PHASE_B))
++      {
++         // event changed, maybe a release_enpoind or stop_operation
++         // return without sending an event
++         ast_log(LOG_DEBUG, "receive_fax_thread: Fax didn't reach phase B on ch %d on channel %s\n",
++               chan_vars->trs_reply.chan_id, ast_channel_name(chan));
++
++         // Clear FAX_TONE_DETECTED flag in case it was activated
++         ast_channel_lock(chan);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CED_DETECTED);
++         ast_clear_flag(ast_channel_inoflags(chan), FAX_TONE_CNG_DETECTED);
++         ast_channel_unlock(chan);
++
++         trs_reply.body.fax_reply.status = 0; // SUCCESS
++         trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
++
++         // send event
++         asteriskSendReply(&trs_reply, chan_vars);
++
++         chan_vars->fax.enabled = FALSE;
++
++         return NULL;
++      }
++
+       if(ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
+       {
+          // event changed, maybe a release_enpoind or stop_operation
+@@ -1921,7 +1970,7 @@
              if((s_tmp2 = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
              {
                 sscanf(s_tmp2,"%d", &s_error);
@@ -28,7 +91,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                 trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
                 trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
              }
-@@ -1963,7 +1963,7 @@
+@@ -1963,7 +2012,7 @@
                       if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
                       {
                          sscanf(s_tmp,"%d", &s_error);
@@ -37,9 +100,20 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                          trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
                          trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
                       }
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-03-17 16:20:45.872561562 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-03-19 17:06:17.948645000 +0000
+@@ -195,6 +195,7 @@
+ 
+ #define FAX_ACTIVE            (1 << 19)
+ #define FAX_HANGUP            (1 << 20)
++#define FAX_PHASE_B           (1 << 21)
+ 
+ enum ast_bridge_result {
+ 	AST_BRIDGE_COMPLETE = 0,
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
 --- asterisk-base-11.3.0/res/res_fax.c	2014-03-17 16:22:21.135810353 +0000
-+++ asterisk-11.3.0/res/res_fax.c	2014-03-17 16:30:12.724119000 +0000
++++ asterisk-11.3.0/res/res_fax.c	2014-03-20 09:33:52.046755000 +0000
 @@ -1634,7 +1634,8 @@
  			}
  
@@ -50,21 +124,21 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  				ast_playtones_stop(chan);
  				return -1;
  			}
-@@ -1957,6 +1958,13 @@
+@@ -1956,7 +1957,12 @@
+ 			fax_session_release(s, token);
  			ao2_ref(s, -1);
  			ao2_ref(details, -1);
- 			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
+-			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
 +
 +         if(ast_check_hangup(chan))
-+         {
-+            ast_verbose(VERBOSE_PREFIX_3 "FAX Release on channel %s\n", ast_channel_name(chan));
-+            ast_set_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
-+         }
++            ast_log(LOG_WARNING, "FAX Release on channel %s\n", ast_channel_name(chan));
++         else
++            ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
 +
  			return -1;
  		}
  	}
-@@ -2054,7 +2062,8 @@
+@@ -2054,7 +2060,8 @@
  		}
  
  		if (!(frame = ast_read(chan))) {
@@ -74,17 +148,38 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  			ast_playtones_stop(chan);
  			return -1;
  		}
-@@ -2472,6 +2481,13 @@
+@@ -2471,7 +2478,13 @@
+ 			fax_session_release(s, token);
  			ao2_ref(s, -1);
  			ao2_ref(details, -1);
- 			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
+-			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
++
 +
 +         if(ast_check_hangup(chan))
-+         {
-+            ast_verbose(VERBOSE_PREFIX_3 "FAX Release on channel %s\n", ast_channel_name(chan));
-+            ast_set_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
-+         }
++            ast_log(LOG_WARNING, "FAX Release on channel %s\n", ast_channel_name(chan));
++         else
++            ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", ast_channel_name(chan));
 +
  			return -1;
  		}
  	} else {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-03-17 16:22:21.143810407 +0000
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-03-19 17:07:48.790559000 +0000
+@@ -365,6 +365,7 @@
+    if (completion_code == T30_ERR_OK || completion_code == 131 || completion_code == 128) {
+       ast_string_field_set(s->details, resultstr, "");
+       ast_set_flag(ast_channel_inoflags(s->chan), FAX_ACTIVE);
++      ast_set_flag(ast_channel_inoflags(s->chan), FAX_PHASE_B);
+    } else {
+       ast_string_field_set(s->details, resultstr, t30_completion_code_to_str(completion_code));
+       s_result = completion_code;
+@@ -565,7 +566,7 @@
+       pbx_builtin_setvar_helper(s->chan, "FAXTRSIZE", s_size);
+    }
+ 
+-   if(s_chid)
++   if(s_chid && ast_test_flag(ast_channel_inoflags(s->chan), FAX_PHASE_B))
+    {
+       manager_event(EVENT_FLAG_CALL,
+                        "FaxPhaseE",
