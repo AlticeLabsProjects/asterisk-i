@@ -1,7 +1,23 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-03-17 16:20:51.544560561 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-19 17:06:54.301964000 +0000
-@@ -1593,6 +1593,31 @@
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-20 11:26:51.175832459 +0000
+@@ -1456,6 +1456,7 @@
+    trs_reply.event = SEND_FAX_COMPLETED;
+    trs_reply.error = TRUE;
+ 
++   trs_reply.body.fax_reply.status = -1; // FAX ERROR
+    trs_reply.body.fax_reply.event = SEND_FAX_COMPLETED;      // event returned
+    trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
+    trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
+@@ -1560,6 +1561,7 @@
+    trs_reply.event = SEND_FAX_COMPLETED;
+    trs_reply.error = TRUE;
+ 
++   trs_reply.body.fax_reply.status = -1; // FAX ERROR
+    trs_reply.body.fax_reply.event = SEND_FAX_COMPLETED;      // event returned
+    trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
+    trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
+@@ -1593,6 +1595,31 @@
        if (option_verbose >= 3)
           ast_verbose(VERBOSE_PREFIX_3 "send_fax_thread: Exiting SendFax on channel %s\n", ast_channel_name(chan));
  
@@ -33,7 +49,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
        if(ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
        {
           // event changed, maybe a release_enpoind or stop_operation
-@@ -1621,7 +1646,7 @@
+@@ -1621,7 +1648,7 @@
              if((s_tmp2 = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
              {
                 sscanf(s_tmp2,"%d", &s_error);
@@ -42,7 +58,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                 trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
                 trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
              }
-@@ -1665,7 +1690,7 @@
+@@ -1665,7 +1692,7 @@
                       if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
                       {
                          sscanf(s_tmp,"%d", &s_error);
@@ -51,7 +67,23 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                          trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
                          trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
                       }
-@@ -1892,6 +1917,30 @@
+@@ -1762,6 +1789,7 @@
+    trs_reply.event = RECEIVE_FAX_COMPLETED;
+    trs_reply.error = TRUE;
+ 
++   trs_reply.body.fax_reply.status = -1; // FAX ERROR
+    trs_reply.body.fax_reply.event = RECEIVE_FAX_COMPLETED;      // event returned
+    trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;       // channel ID
+    trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
+@@ -1860,6 +1888,7 @@
+    trs_reply.event = RECEIVE_FAX_COMPLETED;
+    trs_reply.error = TRUE;
+ 
++   trs_reply.body.fax_reply.status = -1; // FAX ERROR
+    trs_reply.body.fax_reply.event = RECEIVE_FAX_COMPLETED;      // event returned
+    trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
+    trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
+@@ -1892,6 +1921,30 @@
        if (option_verbose >= 3)
           ast_verbose(VERBOSE_PREFIX_3 "receive_fax_thread: Exiting ReceiveFax on channel %s\n", ast_channel_name(chan));
  
@@ -82,7 +114,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
        if(ast_test_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT))
        {
           // event changed, maybe a release_enpoind or stop_operation
-@@ -1921,7 +1970,7 @@
+@@ -1921,7 +1974,7 @@
              if((s_tmp2 = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
              {
                 sscanf(s_tmp2,"%d", &s_error);
@@ -91,7 +123,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                 trs_reply.body.fax_reply.status = s_error + FAX_ERROR_MASK; // FAILED
                 trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
              }
-@@ -1963,7 +2012,7 @@
+@@ -1963,7 +2016,7 @@
                       if((s_tmp = pbx_builtin_getvar_helper(chan, "FAXERRORVALUE")))
                       {
                          sscanf(s_tmp,"%d", &s_error);
