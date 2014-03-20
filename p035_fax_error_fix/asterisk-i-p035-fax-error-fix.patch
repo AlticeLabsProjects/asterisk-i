@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-03-17 16:20:51.544560561 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-20 11:26:51.175832459 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-20 17:18:27.547860000 +0000
 @@ -1456,6 +1456,7 @@
     trs_reply.event = SEND_FAX_COMPLETED;
     trs_reply.error = TRUE;
@@ -36,7 +36,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         ast_channel_unlock(chan);
 +
 +         trs_reply.body.fax_reply.status = 0; // SUCCESS
-+         trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
++         trs_reply.body.error_value = 3337; // Far end is not able to receive
 +
 +         // send event
 +         asteriskSendReply(&trs_reply, chan_vars);
@@ -101,7 +101,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         ast_channel_unlock(chan);
 +
 +         trs_reply.body.fax_reply.status = 0; // SUCCESS
-+         trs_reply.body.error_value = RESOURCE_ERROR; // FAILED
++         trs_reply.body.error_value = 3338; // Far end is not able to transmit
 +
 +         // send event
 +         asteriskSendReply(&trs_reply, chan_vars);
