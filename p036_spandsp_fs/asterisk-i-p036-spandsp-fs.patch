@@ -1,0 +1,176 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
+--- asterisk-base-11.3.0/res/res_fax.c	2014-04-16 12:19:53.177027558 +0100
++++ asterisk-11.3.0/res/res_fax.c	2014-04-24 11:56:11.336586000 +0100
+@@ -1418,7 +1418,11 @@
+ 		struct ast_channel *ready_chan;
+ 		int ofd, exception;
+ 
+-		if ((ast_check_hangup(chan) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE))) {
++	   if (ast_test_flag(ast_channel_inoflags(chan), FAX_HANGUP) || ast_check_hangup(chan) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)) {
++
++	      ast_verb(3, "Fax hangup, session stopped\n");
++
++         set_channel_variables(chan, details);
+ 
+ 		   if (fax) {
+ 		       ao2_lock(faxregistry.container);
+@@ -1434,6 +1438,8 @@
+ 
+ 	      ast_verb(3, "FAX Exit flag activated, session stopped\n");
+ 
++         set_channel_variables(chan, details);
++
+          c = NULL;
+          chancount = 0;
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-04-16 12:19:53.181027503 +0100
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-04-24 11:38:35.560777421 +0100
+@@ -169,7 +169,7 @@
+ static int t30_phase_b_handler(t30_state_t *t30_state, void *data, int completion_code);
+ static int t30_phase_d_handler(t30_state_t *t30_state, void *data, int completion_code);
+ static void t30_phase_e_handler(t30_state_t *t30_state, void *data, int completion_code);
+-static void spandsp_log(int level, const char *msg);
++static void spandsp_log(void *user_data, int level, const char *text);
+ static int update_stats(struct spandsp_pvt *p, int completion_code);
+ static int spandsp_modems(struct ast_fax_session_details *details);
+ 
+@@ -482,6 +482,16 @@
+                       );
+    }
+ 
++   ast_log(LOG_DEBUG, "Phase D Page %d\n", (s->details->caps & AST_FAX_TECH_RECEIVE)  ?  stats.pages_rx  :  stats.pages_tx);
++   ast_log(LOG_DEBUG, "Image type = %s (%s in the file)\n", t4_image_type_to_str(stats.type), t4_image_type_to_str(stats.image_type));
++   ast_log(LOG_DEBUG, "Image size = %d x %d pixels (%d x %d pixels in the file)\n", stats.width, stats.length, stats.image_width, stats.image_length);
++   ast_log(LOG_DEBUG, "Image resolution = %d/m x %d/m (%d/m x %d/m in the file)\n", stats.x_resolution, stats.y_resolution, stats.image_x_resolution, stats.image_y_resolution);
++   ast_log(LOG_DEBUG, "Compression = %s (%d)\n", t4_compression_to_str(stats.compression), stats.compression);
++   ast_log(LOG_DEBUG, "Compressed image size = %d bytes\n", stats.image_size);
++   ast_log(LOG_DEBUG, "Bad rows = %d\n", stats.bad_rows);
++   ast_log(LOG_DEBUG, "Longest bad row run = %d\n", stats.longest_bad_row_run);
++   ast_log(LOG_DEBUG, "Phase D end\n");
++
+    return s_result;
+ }
+ 
+@@ -550,6 +560,11 @@
+    }
+    ast_channel_unlock(s->chan);
+ 
++   pbx_builtin_setvar_helper(s->chan, "FAXSTATUS", S_OR(s->details->result, NULL));
++   pbx_builtin_setvar_helper(s->chan, "FAXERROR", S_OR(s->details->error, NULL));
++   pbx_builtin_setvar_helper(s->chan, "FAXSTATUSSTRING", S_OR(s->details->resultstr, NULL));
++   pbx_builtin_setvar_helper(s->chan, "REMOTESTATIONID", S_OR(s->details->remotestationid, NULL));
++   pbx_builtin_setvar_helper(s->chan, "LOCALSTATIONID", S_OR(s->details->localstationid, NULL));
+    pbx_builtin_setvar_helper(s->chan, "FAXERRORVALUE", s->details->error);
+    pbx_builtin_setvar_helper(s->chan, "FAXBITRATE", s->details->transfer_rate);
+    pbx_builtin_setvar_helper(s->chan, "FAXRESOLUTION", s->details->resolution);
+@@ -599,6 +614,19 @@
+                        );
+    }
+    ast_set_flag(ast_channel_inoflags(s->chan), FAX_PHASE_E_EXIT);
++
++   ast_log(LOG_DEBUG, "Phase E report\n");
++   ast_log(LOG_DEBUG, "Remote station id: %s\n", s->details->remotestationid);
++   ast_log(LOG_DEBUG, "Local station id:  %s\n", s->details->localstationid);
++   ast_log(LOG_DEBUG, "Pages transferred: %d\n", s->details->pages_transferred);
++   ast_log(LOG_DEBUG, "Total fax pages:   %i\n", stats.pages_in_file);
++   ast_log(LOG_DEBUG, "Image resolution:  %s\n", s->details->resolution);
++   ast_log(LOG_DEBUG, "Transfer Rate:     %s\n", s->details->transfer_rate);
++   ast_log(LOG_DEBUG, "ECM status         %s\n", (stats.error_correcting_mode) ? "on" : "off");
++   ast_log(LOG_DEBUG, "remote country:   %s\n", t30_get_rx_country(t30_state) ? t30_get_rx_country(t30_state) : "");
++   ast_log(LOG_DEBUG, "remote vendor:    %s\n", t30_get_rx_vendor(t30_state) ? t30_get_rx_vendor(t30_state) : "");
++   ast_log(LOG_DEBUG, "remote model:     %s\n", t30_get_rx_model(t30_state) ? t30_get_rx_model(t30_state) : "");
++   ast_log(LOG_DEBUG, "Phase E end\n");
+ }
+ 
+ /*! \brief Send spandsp log messages to asterisk.
+@@ -607,15 +635,15 @@
+  *
+  * \note This function is a callback function called by spandsp.
+  */
+-static void spandsp_log(int level, const char *msg)
++static void spandsp_log(void *user_data, int level, const char *text)
+ {
+-	if (level == SPAN_LOG_ERROR) {
+-		ast_log(LOG_ERROR, "%s", msg);
+-	} else if (level == SPAN_LOG_WARNING) {
+-		ast_log(LOG_WARNING, "%s", msg);
+-	} else {
+-		ast_fax_log(LOG_DEBUG, msg);
+-	}
++   if (level == SPAN_LOG_ERROR) {
++      ast_log(LOG_ERROR, "%s", text);
++   } else if (level == SPAN_LOG_WARNING) {
++      ast_log(LOG_WARNING, "%s", text);
++   } else {
++      ast_fax_log(LOG_DEBUG, text);
++   }
+ }
+ 
+ static void set_logging(logging_state_t *state, struct ast_fax_session_details *details)
+@@ -626,7 +654,7 @@
+ 		level = SPAN_LOG_DEBUG_3;
+ 	}
+ 
+-	span_log_set_message_handler(state, spandsp_log);
++	span_log_set_message_handler(state, spandsp_log, NULL);
+ 	span_log_set_level(state, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | level);
+ }
+ 
+@@ -656,7 +684,46 @@
+ static void set_ecm(t30_state_t *t30_state, struct ast_fax_session_details *details)
+ {
+ 	t30_set_ecm_capability(t30_state, details->option.ecm);
+-	t30_set_supported_compressions(t30_state, T30_SUPPORT_T4_1D_COMPRESSION | T30_SUPPORT_T4_2D_COMPRESSION | T30_SUPPORT_T6_COMPRESSION);
++
++   t30_set_supported_image_sizes(t30_state,
++                                 T4_SUPPORT_LENGTH_US_LETTER
++                               | T4_SUPPORT_LENGTH_US_LEGAL
++                               | T4_SUPPORT_LENGTH_UNLIMITED
++                               | T4_SUPPORT_WIDTH_215MM
++                               | T4_SUPPORT_WIDTH_255MM
++                               | T4_SUPPORT_WIDTH_303MM);
++
++   t30_set_supported_bilevel_resolutions(t30_state,
++                                         T4_RESOLUTION_R8_STANDARD
++                                       | T4_RESOLUTION_R8_FINE
++                                       | T4_RESOLUTION_R8_SUPERFINE
++                                       | T4_RESOLUTION_R16_SUPERFINE
++                                       | T4_RESOLUTION_200_100
++                                       | T4_RESOLUTION_200_200
++                                       | T4_RESOLUTION_200_400
++                                       | T4_RESOLUTION_400_400);
++
++   t30_set_supported_compressions(t30_state,
++                                  T4_COMPRESSION_T4_1D
++                                | T4_COMPRESSION_T4_2D
++                                | T4_COMPRESSION_T6
++                                | T4_COMPRESSION_T85
++                                | T4_COMPRESSION_T85_L0
++                                | T4_COMPRESSION_RESCALING
++                                | T4_COMPRESSION_GRAY_TO_BILEVEL);
++
++
++   t30_set_supported_output_compressions(t30_state,
++                                         T4_COMPRESSION_T4_1D
++                                       | T4_COMPRESSION_T4_2D
++                                       | T4_COMPRESSION_T6
++                                       | T4_COMPRESSION_T85
++                                       | T4_COMPRESSION_T85_L0
++                                       | T4_COMPRESSION_RESCALING
++                                       | T4_COMPRESSION_GRAY_TO_BILEVEL);
++
++   t30_set_supported_colour_resolutions(t30_state, 0);
++
+ }
+ 
+ static int spandsp_v21_new(struct spandsp_pvt *p)
+@@ -1312,7 +1379,7 @@
+ 	}
+ 
+ 	/* prevent logging to stderr */
+-	span_set_message_handler(NULL);
++	span_set_message_handler(NULL, NULL);
+ 
+ 	return AST_MODULE_LOAD_SUCCESS;
+ }
