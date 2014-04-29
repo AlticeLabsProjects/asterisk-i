@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
---- asterisk-base-11.3.0/res/res_fax.c	2014-04-16 12:19:53.177027558 +0100
-+++ asterisk-11.3.0/res/res_fax.c	2014-04-24 11:56:11.336586000 +0100
+--- asterisk-base-11.3.0/res/res_fax.c	2014-04-29 09:40:01.024777472 +0100
++++ asterisk-11.3.0/res/res_fax.c	2014-04-29 09:41:12.220777157 +0100
 @@ -1418,7 +1418,11 @@
  		struct ast_channel *ready_chan;
  		int ofd, exception;
@@ -24,8 +24,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
           chancount = 0;
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
---- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-04-16 12:19:53.181027503 +0100
-+++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-04-24 11:38:35.560777421 +0100
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-04-29 09:40:01.028776912 +0100
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-04-29 09:43:24.400624000 +0100
 @@ -169,7 +169,7 @@
  static int t30_phase_b_handler(t30_state_t *t30_state, void *data, int completion_code);
  static int t30_phase_d_handler(t30_state_t *t30_state, void *data, int completion_code);
@@ -117,16 +117,14 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	span_log_set_level(state, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | level);
  }
  
-@@ -656,7 +684,46 @@
+@@ -656,7 +684,32 @@
  static void set_ecm(t30_state_t *t30_state, struct ast_fax_session_details *details)
  {
  	t30_set_ecm_capability(t30_state, details->option.ecm);
 -	t30_set_supported_compressions(t30_state, T30_SUPPORT_T4_1D_COMPRESSION | T30_SUPPORT_T4_2D_COMPRESSION | T30_SUPPORT_T6_COMPRESSION);
 +
 +   t30_set_supported_image_sizes(t30_state,
-+                                 T4_SUPPORT_LENGTH_US_LETTER
-+                               | T4_SUPPORT_LENGTH_US_LEGAL
-+                               | T4_SUPPORT_LENGTH_UNLIMITED
++                                 T4_SUPPORT_LENGTH_UNLIMITED
 +                               | T4_SUPPORT_WIDTH_215MM
 +                               | T4_SUPPORT_WIDTH_255MM
 +                               | T4_SUPPORT_WIDTH_303MM);
@@ -135,37 +133,25 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                                         T4_RESOLUTION_R8_STANDARD
 +                                       | T4_RESOLUTION_R8_FINE
 +                                       | T4_RESOLUTION_R8_SUPERFINE
-+                                       | T4_RESOLUTION_R16_SUPERFINE
-+                                       | T4_RESOLUTION_200_100
-+                                       | T4_RESOLUTION_200_200
-+                                       | T4_RESOLUTION_200_400
-+                                       | T4_RESOLUTION_400_400);
++                                       | T4_RESOLUTION_R16_SUPERFINE);
 +
 +   t30_set_supported_compressions(t30_state,
 +                                  T4_COMPRESSION_T4_1D
 +                                | T4_COMPRESSION_T4_2D
-+                                | T4_COMPRESSION_T6
-+                                | T4_COMPRESSION_T85
-+                                | T4_COMPRESSION_T85_L0
-+                                | T4_COMPRESSION_RESCALING
-+                                | T4_COMPRESSION_GRAY_TO_BILEVEL);
++                                | T4_COMPRESSION_T6);
 +
 +
 +   t30_set_supported_output_compressions(t30_state,
 +                                         T4_COMPRESSION_T4_1D
 +                                       | T4_COMPRESSION_T4_2D
-+                                       | T4_COMPRESSION_T6
-+                                       | T4_COMPRESSION_T85
-+                                       | T4_COMPRESSION_T85_L0
-+                                       | T4_COMPRESSION_RESCALING
-+                                       | T4_COMPRESSION_GRAY_TO_BILEVEL);
++                                       | T4_COMPRESSION_T6);
 +
 +   t30_set_supported_colour_resolutions(t30_state, 0);
 +
  }
  
  static int spandsp_v21_new(struct spandsp_pvt *p)
-@@ -1312,7 +1379,7 @@
+@@ -1312,7 +1365,7 @@
  	}
  
  	/* prevent logging to stderr */
