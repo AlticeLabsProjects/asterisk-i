@@ -1,0 +1,213 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/configs/res_fax.conf.sample asterisk-11.3.0/configs/res_fax.conf.sample
+--- asterisk-base-11.3.0/configs/res_fax.conf.sample	2014-05-05 15:54:04.636777435 +0100
++++ asterisk-11.3.0/configs/res_fax.conf.sample	2014-05-05 16:01:02.948777463 +0100
+@@ -26,3 +26,13 @@
+ ; Enable/disable T.30 ECM (error correction mode) by default.
+ ; Default: Enabled
+ ecm=yes
++
++; Enable/disable T.30 CED by default.
++; Default: Enabled
++ced=yes
++
++; Enable/disable T.30 CNG by default.
++; Default: Enabled
++cng=yes
++
++
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
+--- asterisk-base-11.3.0/res/res_fax.c	2014-05-05 15:59:50.332777010 +0100
++++ asterisk-11.3.0/res/res_fax.c	2014-05-05 16:04:43.587481000 +0100
+@@ -334,6 +334,8 @@
+ 	uint32_t ecm:1;
+ 	unsigned int minrate;
+ 	unsigned int maxrate;
++	uint32_t ced:1;
++	uint32_t cng:1;
+ };
+ 
+ static struct fax_options general_options;
+@@ -344,6 +346,8 @@
+ 	.statusevents = RES_FAX_STATUSEVENTS,
+ 	.modems = RES_FAX_MODEM,
+ 	.ecm = AST_FAX_OPTFLAG_TRUE,
++	.cng = AST_FAX_OPTFLAG_TRUE,
++	.ced = AST_FAX_OPTFLAG_TRUE,
+ };
+ 
+ AST_RWLOCK_DEFINE_STATIC(options_lock);
+@@ -482,8 +486,8 @@
+ 	/* These options need to be set to the configured default and may be overridden by
+  	 * SendFAX, ReceiveFAX, or FAXOPT */
+ 	d->option.request_t38 = AST_FAX_OPTFLAG_FALSE;
+-	d->option.send_cng = AST_FAX_OPTFLAG_FALSE;
+-	d->option.send_ced = AST_FAX_OPTFLAG_FALSE;
++   d->option.send_cng = options.cng;
++   d->option.send_ced = options.ced;
+ 	d->option.ecm = options.ecm;
+ 	d->option.statusevents = options.statusevents;
+ 	d->modems = options.modems;
+@@ -1617,8 +1621,13 @@
+ 	struct timeval start;
+ 	int ms;
+ 
++   ast_debug(1, "Send CED tone option.send_ced: %d on %s\n", details->option.send_ced, ast_channel_name(chan));
++
+ 	/* don't send any audio if we've already received a T.38 reinvite */
+-	if (ast_channel_get_t38_state(chan) != T38_STATE_NEGOTIATING) {
++	if (ast_channel_get_t38_state(chan) != T38_STATE_NEGOTIATING && details->option.send_ced) {
++
++	   ast_debug(1, "Send CED tone while waiting for a request to switch to T.38 mode on %s\n", ast_channel_name(chan));
++
+ 		/* generate 3 seconds of CED */
+ 		if (ast_playtones_start(chan, 1024, "!2100/3000", 1)) {
+ 			ast_log(LOG_ERROR, "error generating CED tone on %s\n", ast_channel_name(chan));
+@@ -1901,7 +1910,6 @@
+ 	ast_verb(3, "Channel '%s' receiving FAX '%s'\n", ast_channel_name(chan), args.filename);
+ 
+ 	details->caps = AST_FAX_TECH_RECEIVE;
+-	details->option.send_ced = AST_FAX_OPTFLAG_TRUE;
+ 
+ 	/* check for debug */
+ 	if (ast_test_flag(&opts, OPT_DEBUG) || global_fax_debug) {
+@@ -2043,68 +2051,73 @@
+ 	 */
+ 	timeout_ms = 10500;
+ 
++	ast_debug(1, "Send CNG tone option.send_cng: %d on %s\n", details->option.send_cng, ast_channel_name(chan));
++
+ 	/* don't send any audio if we've already received a T.38 reinvite */
+-	if (ast_channel_get_t38_state(chan) != T38_STATE_NEGOTIATING) {
++	if (ast_channel_get_t38_state(chan) != T38_STATE_NEGOTIATING && details->option.send_cng) {
++
++	   ast_debug(1, "Send CNG tone while listening for the receiver to initiate a switch to T.38 mode on %s\n", ast_channel_name(chan));
++
+ 		if (ast_playtones_start(chan, 1024, "!1100/500,!0/3000,!1100/500,!0/3000,!1100/500,!0/3000", 1)) {
+ 			ast_log(LOG_ERROR, "error generating CNG tone on %s\n", ast_channel_name(chan));
+ 			return -1;
+ 		}
+-	}
+-
+-	start = ast_tvnow();
+-	while ((ms = ast_remaining_ms(start, timeout_ms))) {
+-		int break_loop = 0;
+-		ms = ast_waitfor(chan, ms);
+-		if (ms < 0) {
+-			ast_log(LOG_ERROR, "error while generating CNG tone on %s\n", ast_channel_name(chan));
+-			ast_playtones_stop(chan);
+-			return -1;
+-		}
+ 
+-		if (ms == 0) { /* all done, nothing happened */
+-			break;
+-		}
++      start = ast_tvnow();
++      while ((ms = ast_remaining_ms(start, timeout_ms))) {
++         int break_loop = 0;
++         ms = ast_waitfor(chan, ms);
++         if (ms < 0) {
++            ast_log(LOG_ERROR, "error while generating CNG tone on %s\n", ast_channel_name(chan));
++            ast_playtones_stop(chan);
++            return -1;
++         }
+ 
+-		if (!(frame = ast_read(chan))) {
+-		   if(!ast_check_hangup(chan))
+-		      ast_log(LOG_ERROR, "error reading frame while generating CNG tone on %s\n", ast_channel_name(chan));
+-			ast_playtones_stop(chan);
+-			return -1;
+-		}
++         if (ms == 0) { /* all done, nothing happened */
++            break;
++         }
+ 
+-		if ((frame->frametype == AST_FRAME_CONTROL) &&
+-				(frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+-				(frame->datalen == sizeof(t38_parameters))) {
+-			struct ast_control_t38_parameters *parameters = frame->data.ptr;
++         if (!(frame = ast_read(chan))) {
++            if(!ast_check_hangup(chan))
++               ast_log(LOG_ERROR, "error reading frame while generating CNG tone on %s\n", ast_channel_name(chan));
++            ast_playtones_stop(chan);
++            return -1;
++         }
+ 
+-			switch (parameters->request_response) {
+-			case AST_T38_REQUEST_NEGOTIATE:
+-				/* the other end has requested a switch to T.38, so reply that we are willing, if we can
+-				 * do T.38 as well
+-				 */
+-				t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+-				t38_parameters.request_response = (details->caps & AST_FAX_TECH_T38) ? AST_T38_NEGOTIATED : AST_T38_REFUSED;
+-				ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
+-				ast_playtones_stop(chan);
+-				break;
+-			case AST_T38_NEGOTIATED:
+-				ast_debug(1, "Negotiated T.38 for send on %s\n", ast_channel_name(chan));
+-				t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
+-				details->caps &= ~AST_FAX_TECH_AUDIO;
+-				report_fax_status(chan, details, "T.38 Negotiated");
+-				break_loop = 1;
+-				break;
+-			default:
+-				break;
+-			}
+-		}
+-		ast_frfree(frame);
+-		if (break_loop) {
+-			break;
+-		}
+-	}
++         if ((frame->frametype == AST_FRAME_CONTROL) &&
++               (frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
++               (frame->datalen == sizeof(t38_parameters))) {
++            struct ast_control_t38_parameters *parameters = frame->data.ptr;
++
++            switch (parameters->request_response) {
++            case AST_T38_REQUEST_NEGOTIATE:
++               /* the other end has requested a switch to T.38, so reply that we are willing, if we can
++                * do T.38 as well
++                */
++               t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
++               t38_parameters.request_response = (details->caps & AST_FAX_TECH_T38) ? AST_T38_NEGOTIATED : AST_T38_REFUSED;
++               ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
++               ast_playtones_stop(chan);
++               break;
++            case AST_T38_NEGOTIATED:
++               ast_debug(1, "Negotiated T.38 for send on %s\n", ast_channel_name(chan));
++               t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
++               details->caps &= ~AST_FAX_TECH_AUDIO;
++               report_fax_status(chan, details, "T.38 Negotiated");
++               break_loop = 1;
++               break;
++            default:
++               break;
++            }
++         }
++         ast_frfree(frame);
++         if (break_loop) {
++            break;
++         }
++      }
+ 
+-	ast_playtones_stop(chan);
++      ast_playtones_stop(chan);
++   }
+ 
+ 	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+ 		return 0;
+@@ -3937,7 +3950,13 @@
+ 		} else if ((!strcasecmp(v->name, "modem")) || (!strcasecmp(v->name, "modems"))) {
+ 			options.modems = 0;
+ 			update_modem_bits(&options.modems, v->value);
+-		}
++		} else if (!strcasecmp(v->name, "ced")) {
++         ast_debug(3, "reading ced '%s' from configuration file\n", v->value);
++         options.ced = ast_true(v->value);
++      }  else if (!strcasecmp(v->name, "cng")) {
++         ast_debug(3, "reading cng '%s' from configuration file\n", v->value);
++         options.cng = ast_true(v->value);
++      }
+ 	}
+ 
+ 	if (options.maxrate < options.minrate) {
