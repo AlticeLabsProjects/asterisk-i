@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
---- asterisk-base-11.3.0/res/res_fax.c	2014-05-05 16:53:25.865526936 +0100
-+++ asterisk-11.3.0/res/res_fax.c	2014-05-05 16:53:54.176777590 +0100
+--- asterisk-base-11.3.0/res/res_fax.c	2014-05-06 15:03:55.125277418 +0100
++++ asterisk-11.3.0/res/res_fax.c	2014-05-06 15:05:28.316777426 +0100
 @@ -1418,7 +1418,11 @@
  		struct ast_channel *ready_chan;
  		int ofd, exception;
@@ -24,8 +24,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
           chancount = 0;
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
---- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-05-05 16:53:25.869527599 +0100
-+++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-05-05 16:55:14.187916000 +0100
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-05-06 15:03:55.129277498 +0100
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-05-06 15:06:22.532776759 +0100
 @@ -169,7 +169,7 @@
  static int t30_phase_b_handler(t30_state_t *t30_state, void *data, int completion_code);
  static int t30_phase_d_handler(t30_state_t *t30_state, void *data, int completion_code);
@@ -117,7 +117,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	span_log_set_level(state, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | level);
  }
  
-@@ -656,7 +684,46 @@
+@@ -656,7 +684,42 @@
  static void set_ecm(t30_state_t *t30_state, struct ast_fax_session_details *details)
  {
  	t30_set_ecm_capability(t30_state, details->option.ecm);
@@ -145,8 +145,6 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                                  T4_COMPRESSION_T4_1D
 +                                | T4_COMPRESSION_T4_2D
 +                                | T4_COMPRESSION_T6
-+                                | T4_COMPRESSION_T85
-+                                | T4_COMPRESSION_T85_L0
 +                                | T4_COMPRESSION_RESCALING
 +                                | T4_COMPRESSION_GRAY_TO_BILEVEL);
 +
@@ -155,8 +153,6 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +                                         T4_COMPRESSION_T4_1D
 +                                       | T4_COMPRESSION_T4_2D
 +                                       | T4_COMPRESSION_T6
-+                                       | T4_COMPRESSION_T85
-+                                       | T4_COMPRESSION_T85_L0
 +                                       | T4_COMPRESSION_RESCALING
 +                                       | T4_COMPRESSION_GRAY_TO_BILEVEL);
 +
@@ -165,7 +161,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  }
  
  static int spandsp_v21_new(struct spandsp_pvt *p)
-@@ -1312,7 +1379,7 @@
+@@ -1312,7 +1375,7 @@
  	}
  
  	/* prevent logging to stderr */
