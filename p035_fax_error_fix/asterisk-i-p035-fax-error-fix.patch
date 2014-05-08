@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
---- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-03-17 16:20:51.544560561 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2014-03-20 17:18:27.547860000 +0000
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-05-08 17:48:26.625277467 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-05-08 17:54:37.685951000 +0100
 @@ -1456,6 +1456,7 @@
     trs_reply.event = SEND_FAX_COMPLETED;
     trs_reply.error = TRUE;
@@ -9,6 +9,17 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
     trs_reply.body.fax_reply.event = SEND_FAX_COMPLETED;      // event returned
     trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;   // channel ID
     trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
+@@ -1492,8 +1493,8 @@
+          if (option_verbose >= 3)
+             ast_verbose(VERBOSE_PREFIX_3 "send_fax: |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
+ 
+-         snprintf(chan_vars->fax.csid, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.csid);
+-         snprintf(chan_vars->fax.header, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.header);
++         snprintf(chan_vars->fax.csid, sizeof(chan_vars->fax.csid), "%s", trs_cmd.fax_param.csid);
++         snprintf(chan_vars->fax.header, sizeof(chan_vars->fax.header), "%s", trs_cmd.fax_param.header);
+          chan_vars->fax.max_baudrate = trs_cmd.fax_param.max_baudrate;
+ 
+          if (ast_pthread_create_background(&chan_vars->fax_thread, NULL, send_fax_thread, chan_vars) < 0)
 @@ -1560,6 +1561,7 @@
     trs_reply.event = SEND_FAX_COMPLETED;
     trs_reply.error = TRUE;
@@ -75,6 +86,15 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
     trs_reply.body.fax_reply.event = RECEIVE_FAX_COMPLETED;      // event returned
     trs_reply.body.fax_reply.chID = chan_vars->trs_reply.chan_id;       // channel ID
     trs_reply.body.fax_reply.format = FAX_FORMAT_TIFF;     // fax storage format
+@@ -1797,7 +1825,7 @@
+          if (option_verbose >= 3)
+             ast_verbose(VERBOSE_PREFIX_3 "receive_fax |%s| on channel %s\n", trs_cmd.fax_param.fax_file, ast_channel_name(chan));
+ 
+-         snprintf(chan_vars->fax.csid, sizeof(chan_vars->fax.fax_file), "%s", trs_cmd.fax_param.csid);
++         snprintf(chan_vars->fax.csid, sizeof(chan_vars->fax.csid), "%s", trs_cmd.fax_param.csid);
+          chan_vars->fax.max_baudrate = trs_cmd.fax_param.max_baudrate;
+ 
+          if (ast_pthread_create_background(&chan_vars->fax_thread, NULL, receive_fax_thread, chan_vars) < 0)
 @@ -1860,6 +1888,7 @@
     trs_reply.event = RECEIVE_FAX_COMPLETED;
     trs_reply.error = TRUE;
@@ -133,8 +153,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                          trs_reply.body.error_value = s_error + FAX_ERROR_MASK; // FAILED
                       }
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
---- asterisk-base-11.3.0/include/asterisk/channel.h	2014-03-17 16:20:45.872561562 +0000
-+++ asterisk-11.3.0/include/asterisk/channel.h	2014-03-19 17:06:17.948645000 +0000
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-05-08 17:48:26.325277369 +0100
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-05-08 17:51:10.900777478 +0100
 @@ -195,6 +195,7 @@
  
  #define FAX_ACTIVE            (1 << 19)
@@ -144,8 +164,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  enum ast_bridge_result {
  	AST_BRIDGE_COMPLETE = 0,
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax.c asterisk-11.3.0/res/res_fax.c
---- asterisk-base-11.3.0/res/res_fax.c	2014-03-17 16:22:21.135810353 +0000
-+++ asterisk-11.3.0/res/res_fax.c	2014-03-20 09:33:52.046755000 +0000
+--- asterisk-base-11.3.0/res/res_fax.c	2014-05-08 17:48:55.753027341 +0100
++++ asterisk-11.3.0/res/res_fax.c	2014-05-08 17:51:10.912777436 +0100
 @@ -1634,7 +1634,8 @@
  			}
  
@@ -196,8 +216,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		}
  	} else {
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
---- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-03-17 16:22:21.143810407 +0000
-+++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-03-19 17:07:48.790559000 +0000
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2014-05-08 17:48:55.757027416 +0100
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2014-05-08 17:51:10.916777498 +0100
 @@ -365,6 +365,7 @@
     if (completion_code == T30_ERR_OK || completion_code == 131 || completion_code == 128) {
        ast_string_field_set(s->details, resultstr, "");
