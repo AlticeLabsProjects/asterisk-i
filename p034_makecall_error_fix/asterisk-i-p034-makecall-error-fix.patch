@@ -1,11 +1,32 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
---- asterisk-base-11.3.0/main/channel.c	2014-03-17 16:02:36.356560447 +0000
-+++ asterisk-11.3.0/main/channel.c	2014-03-17 16:06:13.198333000 +0000
-@@ -5865,6 +5865,7 @@
+--- asterisk-base-11.3.0/main/channel.c	2014-05-19 12:23:10.500777125 +0100
++++ asterisk-11.3.0/main/channel.c	2014-05-19 12:27:06.820777611 +0100
+@@ -5664,7 +5664,7 @@
+ 
+ struct ast_channel *___ast_request_and_dial(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *addr, int timeout, int *outstate, const char *cid_num, const char *cid_name, struct outgoing_helper *oh, struct originate_params *origparm, const char *idtext)
+ {
+-	int dummy_outstate;
++	int dummy_outstate, s_outstate;
+ 	int cause = 0;
+ 	struct ast_channel *chan;
+ 	int res = 0;
+@@ -5846,6 +5846,8 @@
+ 		}
+ 	}
+ 
++        s_outstate = *outstate;
++
+ 	*outstate = ast_channel_hangupcause(chan);
+ 
+ 	/* Final fixups */
+@@ -5863,8 +5865,9 @@
+ 	if (res <= 0) {
+ 		struct ast_cdr *chancdr;
  		ast_channel_lock(chan);
- 		if (AST_CONTROL_RINGING == last_subclass) {
+-		if (AST_CONTROL_RINGING == last_subclass) {
++		if (AST_CONTROL_RINGING == last_subclass || AST_CONTROL_RINGING == s_outstate) {
  			ast_channel_hangupcause_set(chan, AST_CAUSE_NO_ANSWER);
-+			*outstate = AST_CAUSE_NO_ANSWER;
++                        *outstate = AST_CAUSE_NO_ANSWER;
  		}
  		if (!ast_channel_cdr(chan) && (chancdr = ast_cdr_alloc())) {
  			ast_channel_cdr_set(chan, chancdr);
