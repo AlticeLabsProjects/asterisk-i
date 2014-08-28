@@ -1,0 +1,125 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-08-27 16:49:42.860777330 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2014-08-27 17:22:49.363894000 +0100
+@@ -1483,7 +1483,7 @@
+ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action);
+ static int process_sdp_o(const char *o, struct sip_pvt *p);
+ static int process_sdp_c(const char *c, struct ast_sockaddr *addr);
+-static int process_sdp_a_sendonly(const char *a, int *sendonly);
++static int process_sdp_a_sendonly(struct sip_pvt *dialog, const char *a, int *sendonly);
+ static int process_sdp_a_ice(const char *a, struct sip_pvt *p, struct ast_rtp_instance *instance);
+ static int process_sdp_a_dtls(const char *a, struct sip_pvt *p, struct ast_rtp_instance *instance);
+ static int process_sdp_a_audio(const char *a, struct sip_pvt *p, struct ast_rtp_codecs *newaudiortp, int *last_rtpmap_codec);
+@@ -10423,7 +10423,7 @@
+ 			}
+ 			break;
+ 		case 'a':
+-			if (process_sdp_a_sendonly(value, &sendonly)) {
++			if (process_sdp_a_sendonly(p, value, &sendonly)) {
+ 				processed = TRUE;
+ 			}
+ 			else if (process_sdp_a_audio(value, p, &newaudiortp, &last_rtpmap_codec))
+@@ -10825,7 +10825,7 @@
+ 						processed = TRUE;
+ 					} else if (process_sdp_a_dtls(value, p, p->rtp)) {
+ 						processed = TRUE;
+-					} else if (process_sdp_a_sendonly(value, &sendonly)) {
++					} else if (process_sdp_a_sendonly(p, value, &sendonly)) {
+ 						processed = TRUE;
+ 					} else if (!processed_crypto && process_crypto(p, p->rtp, &p->srtp, value)) {
+ 						processed_crypto = TRUE;
+@@ -11299,23 +11299,35 @@
+ 	return FALSE;
+ }
+ 
+-static int process_sdp_a_sendonly(const char *a, int *sendonly)
++static int process_sdp_a_sendonly(struct sip_pvt *dialog, const char *a, int *sendonly)
+ {
+ 	int found = FALSE;
+ 
+-	if (!strcasecmp(a, "sendonly")) {
+-		if (*sendonly == -1)
+-			*sendonly = 1;
+-		found = TRUE;
+-	} else if (!strcasecmp(a, "inactive")) {
+-		if (*sendonly == -1)
+-			*sendonly = 2;
+-		found = TRUE;
+-	}  else if (!strcasecmp(a, "sendrecv")) {
+-		if (*sendonly == -1)
+-			*sendonly = 0;
+-		found = TRUE;
+-	}
++   /* Ensure hold flags are cleared so that overlapping flags do not conflict */
++   ast_clear_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER);
++
++   if (!strcasecmp(a, "sendonly")) {
++      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_RECVONLY);
++      if (*sendonly == -1)
++         *sendonly = 1;
++      found = TRUE;
++   } else if (!strcasecmp(a, "inactive")) {
++      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_INACTIVE);
++      if (*sendonly == -1)
++         *sendonly = 2;
++      found = TRUE;
++   }  else if (!strcasecmp(a, "sendrecv")) {
++      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_SENDRECV);
++      if (*sendonly == -1)
++         *sendonly = 0;
++      found = TRUE;
++   } else if (!strcasecmp(a, "recvonly")) {
++      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_SENDONLY);
++      if (*sendonly == -1)
++         *sendonly = 0;
++      found = TRUE;
++   }
++
+ 	return found;
+ }
+ 
+@@ -14078,15 +14090,19 @@
+ 		 ast_sockaddr_stringify_addr_remote(&dest));
+ 
+ 	if (add_audio) {
+-		if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) == SIP_PAGE2_CALL_ONHOLD_ONEDIR) {
+-			hold = "a=recvonly\r\n";
+-			doing_directmedia = FALSE;
+-		} else if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) == SIP_PAGE2_CALL_ONHOLD_INACTIVE) {
+-			hold = "a=inactive\r\n";
+-			doing_directmedia = FALSE;
+-		} else {
+-			hold = "a=sendrecv\r\n";
+-		}
++      if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) == SIP_PAGE2_CALL_ONHOLD_ONEDIR
++            || ast_test_flag(&p->flags[1], SIP_PAGE2_OFFER_ANSWER) == SIP_PAGE2_OFFER_ANSWER_RECVONLY) {
++         hold = "a=recvonly\r\n";
++         doing_directmedia = FALSE;
++      } else if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) == SIP_PAGE2_CALL_ONHOLD_INACTIVE
++            || ast_test_flag(&p->flags[1], SIP_PAGE2_OFFER_ANSWER) == SIP_PAGE2_OFFER_ANSWER_INACTIVE) {
++         hold = "a=inactive\r\n";
++         doing_directmedia = FALSE;
++      } else if (ast_test_flag(&p->flags[1], SIP_PAGE2_OFFER_ANSWER) == SIP_PAGE2_OFFER_ANSWER_SENDONLY) {
++         hold = "a=sendonly\r\n";
++      } else {
++         hold = "a=sendrecv\r\n";
++      }
+ 
+ 		ast_format_cap_copy(tmpcap, p->jointcaps);
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/sip/include/sip.h asterisk-11.3.0/channels/sip/include/sip.h
+--- asterisk-base-11.3.0/channels/sip/include/sip.h	2014-08-27 16:49:42.225027430 +0100
++++ asterisk-11.3.0/channels/sip/include/sip.h	2014-08-27 17:20:01.983962000 +0100
+@@ -372,6 +372,12 @@
+ #define SIP_PAGE2_HAVEPEERCONTEXT           (1 << 28)   /*< Are we associated with a configured peer context? */
+ #define SIP_PAGE2_USE_SRTP                  (1 << 29)   /*!< DP: Whether we should offer (only)  SRTP */
+ 
++#define SIP_PAGE2_OFFER_ANSWER              (3 << 30)   /* Offer/answer model state */
++#define SIP_PAGE2_OFFER_ANSWER_INACTIVE     (0 << 30)   /* Offer/answer inactive state */
++#define SIP_PAGE2_OFFER_ANSWER_SENDONLY     (1 << 30)   /* Offer/answer sendonly state */
++#define SIP_PAGE2_OFFER_ANSWER_RECVONLY     (2 << 30)   /* Offer/answer recvonly state */
++#define SIP_PAGE2_OFFER_ANSWER_SENDRECV     (3 << 30)   /* Offer/answer sendrecv state */
++
+ #define SIP_PAGE2_FLAGS_TO_COPY \
+ 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
+ 	SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | \
