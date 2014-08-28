@@ -1,0 +1,11 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-08-28 11:20:43.619003000 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2014-08-28 11:23:08.348986000 +0100
+@@ -14736,7 +14736,6 @@
+ 			ast_set_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);
+ 		}
+ 		add_prack_respheader(p, &resp, reliable);
+-		add_required_respheader(&resp);
+ 	}
+ 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
+ 		add_cc_call_info_to_response(p, &resp);
