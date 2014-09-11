@@ -1,0 +1,75 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-09-10 15:42:19.380777609 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2014-09-10 15:54:07.681757000 +0100
+@@ -31758,7 +31758,13 @@
+ }
+ static struct ast_channel *sip_request_call(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *dest, int *cause)
+ {
+-   return _sip_request_call(type, cap, requestor, dest, cause, NULL);
++   struct manager_globals mg;
++
++   ast_string_field_init(&mg, 252);
++   ast_string_field_set(&mg, global_callid, NULL);
++   ast_string_field_set(&mg, actionid, NULL);
++
++   return _sip_request_call(type, cap, requestor, dest, cause, &mg);
+ }
+ 
+ /*! \brief Parse insecure= setting in sip.conf and set flags according to setting */
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2014-09-10 15:42:56.597032650 +0100
++++ asterisk-11.3.0/main/channel.c	2014-09-10 15:52:40.716875000 +0100
+@@ -5987,8 +5987,6 @@
+ 			}
+ 		}
+ 		AST_RWLIST_UNLOCK(&backends);
+-		if (!chan->tech->requester)
+-			return NULL;
+ 
+ 		/* XXX Only the audio format calculated as being the best for translation
+ 		 * purposes is used for the request. This needs to be re-evaluated.  It may be
+@@ -6000,10 +5998,25 @@
+ 		ast_format_cap_remove_bytype(joint_cap, AST_FORMAT_TYPE_AUDIO);
+ 		ast_format_cap_add(joint_cap, &best_audio_fmt);
+ 
+-		if (!(c = chan->tech->_requester(type, joint_cap, requestor, addr, cause, mg))) {
+-			ast_format_cap_destroy(joint_cap);
+-			return NULL;
+-		}
++		/* Use the _requester function, if there isn't one registered use requester function */
++      if (chan->tech->_requester)
++      {
++         if (!(c = chan->tech->_requester(type, joint_cap, requestor, addr, cause, mg))) {
++            ast_format_cap_destroy(joint_cap);
++            return NULL;
++         }
++      }
++      else if (chan->tech->requester)
++      {
++         if (!(c = chan->tech->requester(type, joint_cap, requestor, addr, cause))) {
++            ast_format_cap_destroy(joint_cap);
++            return NULL;
++         }
++      }
++      else
++      {
++         return NULL;
++      }
+ 
+ 		if (mg->actionid)
+ 		{
+@@ -6046,7 +6059,13 @@
+ 
+ struct ast_channel *ast_request(const char *type, struct ast_format_cap *request_cap, const struct ast_channel *requestor, const char *addr, int *cause)
+ {
+-   return _ast_request(type, request_cap, requestor, addr, cause, NULL);
++   struct manager_globals mg;
++
++   ast_string_field_init(&mg, 252);
++   ast_string_field_set(&mg, global_callid, NULL);
++   ast_string_field_set(&mg, actionid, NULL);
++
++   return _ast_request(type, request_cap, requestor, addr, cause, &mg);
+ }
+ 
+ int ast_pre_call(struct ast_channel *chan, const char *sub_args)
