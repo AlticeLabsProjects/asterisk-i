@@ -1,0 +1,73 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-09-11 17:27:10.332777325 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2014-09-12 10:09:26.090335000 +0100
+@@ -11304,28 +11304,30 @@
+ 	int found = FALSE;
+ 
+    /* Ensure hold flags are cleared so that overlapping flags do not conflict */
+-   ast_clear_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER);
++   ast_clear_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER);
+ 
+    if (!strcasecmp(a, "sendonly")) {
+-      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_RECVONLY);
++      ast_set_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER_RECVONLY);
+       if (*sendonly == -1)
+          *sendonly = 1;
+       found = TRUE;
+    } else if (!strcasecmp(a, "inactive")) {
+-      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_INACTIVE);
++      ast_set_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER_INACTIVE);
+       if (*sendonly == -1)
+          *sendonly = 2;
+       found = TRUE;
+    }  else if (!strcasecmp(a, "sendrecv")) {
+-      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_SENDRECV);
++      ast_set_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER_SENDRECV);
+       if (*sendonly == -1)
+          *sendonly = 0;
+       found = TRUE;
+    } else if (!strcasecmp(a, "recvonly")) {
+-      ast_set_flag(&dialog->flags[1], SIP_PAGE2_OFFER_ANSWER_SENDONLY);
++      ast_set_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER_SENDONLY);
+       if (*sendonly == -1)
+          *sendonly = 0;
+       found = TRUE;
++   } else {
++      ast_set_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER_SENDRECV);
+    }
+ 
+ 	return found;
+@@ -14091,14 +14093,14 @@
+ 
+ 	if (add_audio) {
+       if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) == SIP_PAGE2_CALL_ONHOLD_ONEDIR
+-            || ast_test_flag(&p->flags[1], SIP_PAGE2_OFFER_ANSWER) == SIP_PAGE2_OFFER_ANSWER_RECVONLY) {
++            || ast_test_flag(&p->flags[2], SIP_PAGE3_OFFER_ANSWER) == SIP_PAGE3_OFFER_ANSWER_RECVONLY) {
+          hold = "a=recvonly\r\n";
+          doing_directmedia = FALSE;
+       } else if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) == SIP_PAGE2_CALL_ONHOLD_INACTIVE
+-            || ast_test_flag(&p->flags[1], SIP_PAGE2_OFFER_ANSWER) == SIP_PAGE2_OFFER_ANSWER_INACTIVE) {
++            || ast_test_flag(&p->flags[2], SIP_PAGE3_OFFER_ANSWER) == SIP_PAGE3_OFFER_ANSWER_INACTIVE) {
+          hold = "a=inactive\r\n";
+          doing_directmedia = FALSE;
+-      } else if (ast_test_flag(&p->flags[1], SIP_PAGE2_OFFER_ANSWER) == SIP_PAGE2_OFFER_ANSWER_SENDONLY) {
++      } else if (ast_test_flag(&p->flags[2], SIP_PAGE3_OFFER_ANSWER) == SIP_PAGE3_OFFER_ANSWER_SENDONLY) {
+          hold = "a=sendonly\r\n";
+       } else {
+          hold = "a=sendrecv\r\n";
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/sip/include/sip.h asterisk-11.3.0/channels/sip/include/sip.h
+--- asterisk-base-11.3.0/channels/sip/include/sip.h	2014-09-11 17:27:07.240777375 +0100
++++ asterisk-11.3.0/channels/sip/include/sip.h	2014-09-12 10:06:33.230130000 +0100
+@@ -399,6 +399,12 @@
+ #define SIP_PAGE3_INVITE_WAIT_FOR_PRACK  (1 << 9)  /*!< D: Wait for PRACK response before sending 200 OK */
+ #define SIP_PAGE3_ANSWER_WAIT_FOR_PRACK	 (1 << 10)  /*!< D: Send ANSWER when PRACK is received */
+ 
++#define SIP_PAGE3_OFFER_ANSWER           (7 << 11)   /* Offer/answer model state, four settings, uses three bits */
++#define SIP_PAGE3_OFFER_ANSWER_SENDRECV  (0 << 11)   /* Offer/answer inactive state */
++#define SIP_PAGE3_OFFER_ANSWER_SENDONLY  (1 << 11)   /* Offer/answer sendonly state */
++#define SIP_PAGE3_OFFER_ANSWER_RECVONLY  (2 << 11)   /* Offer/answer recvonly state */
++#define SIP_PAGE3_OFFER_ANSWER_INACTIVE  (4 << 11)   /* Offer/answer sendrecv state */
++
+ #define SIP_PAGE3_FLAGS_TO_COPY \
+ 	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_SRTP_TAG_32 | SIP_PAGE3_NAT_AUTO_RPORT | SIP_PAGE3_NAT_AUTO_COMEDIA | \
+ 	 SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_AVPF | SIP_PAGE3_ICE_SUPPORT | SIP_PAGE3_PRACK)
