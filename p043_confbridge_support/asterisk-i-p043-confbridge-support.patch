@@ -1,0 +1,426 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2014-09-15 15:52:15.629027410 +0100
++++ asterisk-11.3.0/apps/app_confbridge.c	2014-09-26 16:41:18.176238000 +0100
+@@ -421,15 +421,15 @@
+ 
+ 	ast_str_reset(*filename);
+ 	if (ast_strlen_zero(rec_file)) {
+-		ast_str_set(filename, 0, "confbridge-%s-%u.wav", bridge->name, (unsigned int)now);
++	   ast_str_set(filename, 0, "confbridge-%s.wav", bridge->name);
+ 	} else {
+ 		/* insert time before file extension */
+ 		ext = strrchr(rec_file, '.');
+ 		if (ext) {
+ 			ast_str_set_substr(filename, 0, rec_file, ext - rec_file);
+-			ast_str_append(filename, 0, "-%u%s", (unsigned int)now, ext);
++			ast_str_append(filename, 0, "%s", ext);
+ 		} else {
+-			ast_str_set(filename, 0, "%s-%u", rec_file, (unsigned int)now);
++		   ast_str_set(filename, 0, "%s", rec_file);
+ 		}
+ 	}
+ 	ast_str_append(filename, 0, ",a");
+@@ -581,23 +581,25 @@
+  */
+ static int start_conf_record_thread(struct conference_bridge *conference_bridge)
+ {
+-	conf_start_record(conference_bridge);
+-
+-	/*
+-	 * if the thread has already been started, don't start another
+-	 */
+-	if (conference_bridge->record_thread != AST_PTHREADT_NULL) {
+-		return 0;
+-	}
+-
+-	ao2_ref(conference_bridge, +1); /* give the record thread a ref */
+-
+-	if (ast_pthread_create_background(&conference_bridge->record_thread, NULL, record_thread, conference_bridge)) {
+-		ast_log(LOG_WARNING, "Failed to create recording channel for conference %s\n", conference_bridge->name);
+-		ao2_ref(conference_bridge, -1); /* error so remove ref */
+-		return -1;
+-	}
+-
++   if ( !conf_is_recording(conference_bridge) )
++   {
++      conf_start_record(conference_bridge);
++
++      /*
++       * if the thread has already been started, don't start another
++       */
++      if (conference_bridge->record_thread != AST_PTHREADT_NULL) {
++         return 0;
++      }
++
++      ao2_ref(conference_bridge, +1); /* give the record thread a ref */
++
++      if (ast_pthread_create_background(&conference_bridge->record_thread, NULL, record_thread, conference_bridge)) {
++         ast_log(LOG_WARNING, "Failed to create recording channel for conference %s\n", conference_bridge->name);
++         ao2_ref(conference_bridge, -1); /* error so remove ref */
++         return -1;
++      }
++   }
+ 	return 0;
+ }
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2014-09-15 15:52:15.849027331 +0100
++++ asterisk-11.3.0/apps/app_wms.c	2014-09-26 16:41:17.994307000 +0100
+@@ -707,6 +707,29 @@
+          }
+       }
+ 
++      if(chan_vars->conference.id)
++      {
++         if (ast_test_flag(ast_channel_inoflags(chan), CONF_PLAY_ENDED))
++         {
++            if (option_verbose >= 4)
++               ast_verbose(VERBOSE_PREFIX_4 "Play announcement finnished in conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
++
++            memset(&trs_reply, 0, sizeof(trs_reply));
++            trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
++            trs_reply.con_id = trs_cmd.con_id;
++            trs_reply.sender = trs_cmd.edp_id;
++            trs_reply.event = CONFERENCE_MANAGER_COMPLETED;
++            trs_reply.error = FALSE;
++            trs_reply.body.g_ret_value = trs_cmd.al_int_val1;
++
++            asteriskSendReply(&trs_reply, chan_vars);
++
++            ast_channel_lock(chan);
++            ast_clear_flag(ast_channel_inoflags(chan), CONF_PLAY_ENDED);
++            ast_channel_unlock(chan);
++         }
++      }
++
+       who = ast_waitfor_nandfds(tempcs, numcs, &chan_vars->trs_fd, 1, NULL, &data_available, &chan_vars->ms);
+ 		if (!who && (data_available < 0) && (chan_vars->ms)) 
+       {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-09-15 15:52:15.853027017 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-09-26 16:33:27.323426000 +0100
+@@ -453,8 +453,8 @@
+    // stop play announcement in conference
+    if (chan_vars->conference.id) 
+    {
+-      ast_set_flag(ast_channel_inoflags(chan), MEETME_STOP_PLAY);
+-      ast_clear_flag(ast_channel_inoflags(chan), MEETME_DO_PLAY);
++      ast_set_flag(ast_channel_inoflags(chan), CONF_STOP_PLAY);
++      ast_clear_flag(ast_channel_inoflags(chan), CONF_DO_PLAY);
+    }
+ 
+    memset(&trs_reply, 0, sizeof(reply_ast));
+@@ -482,11 +482,9 @@
+ 	char *aux, *end;
+ 	char buff[1024];
+ 	char temp_record[1024];
++   char stringp[256];
+ 	int i;
+ 	int hasDTMF;
+-	//pthread_t confThread;
+-   //pthread_attr_t attr;
+-   //int ret;
+ 
+    if (option_verbose >= 4)
+       ast_verbose(VERBOSE_PREFIX_4 "Conference call operation %d on channel %s\n", trs_cmd.al_int_val1, ast_channel_name(chan));
+@@ -590,7 +588,6 @@
+                   *end = '\0';
+                   ast_channel_conf_record_set(chan, temp_record);
+ 
+-                  ast_set_flag(ast_channel_inoflags(chan), MEETME_DO_RECORD);
+                   break;
+ 
+                default:
+@@ -610,24 +607,7 @@
+             trs_cmd.al_char_val1[0] = '\0';
+ 
+          snprintf(chan_vars->conference.args, sizeof(chan_vars->conference.args), trs_cmd.al_char_val1);
+-/*
+-         //InoBeginThreadEx
+-         // Initialize and set thread detached attribute
+-         pthread_attr_init(&attr);
+-         // Set detached attribute
+-         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+-         // Limit thread stack size to InoStackSize
+-         pthread_attr_setstacksize (&attr, stack_size);
+-         // Create the thread
+-         ret = pthread_create(&confThread,  // thread id
+-            &attr,                                    // thread attribute
+-            conference_thread,                             // @parm thread function
+-            NULL                                      // @parm thread argument
+-            );
+-
+-         // We're done with the attribute object, so we can destroy it
+-         pthread_attr_destroy(&attr);
+-*/
++
+          if (chan_vars->conf_thread != AST_PTHREADT_NULL)
+          {
+             memset(&chan_vars->conference, 0, sizeof(chan_vars->conference));
+@@ -676,7 +656,7 @@
+    {
+       if (chan_vars->conference.id)
+       {
+-         ast_set_flag(ast_channel_inoflags(chan), MEETME_MUTE_USER);
++         ast_set_flag(ast_channel_inoflags(chan), CONF_MUTE_USER);
+          if (option_verbose >= 4)
+             ast_verbose(VERBOSE_PREFIX_4 "User muted from conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
+       	asteriskSendReply(&trs_reply, chan_vars);
+@@ -691,7 +671,7 @@
+    {
+       if (chan_vars->conference.id)
+       {
+-         ast_set_flag(ast_channel_inoflags(chan), MEETME_MUTE_ALL);
++         ast_set_flag(ast_channel_inoflags(chan), CONF_MUTE_ALL);
+ 
+          if (option_verbose >= 4)
+             ast_verbose(VERBOSE_PREFIX_4 "Muting conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
+@@ -707,7 +687,7 @@
+    {
+       if (chan_vars->conference.id)
+       {
+-         ast_set_flag(ast_channel_inoflags(chan), MEETME_UNMUTE_USER);
++         ast_set_flag(ast_channel_inoflags(chan), CONF_UNMUTE_USER);
+ 
+          if (option_verbose >= 4)
+             ast_verbose(VERBOSE_PREFIX_4 "User unmuted from conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
+@@ -723,7 +703,7 @@
+    {
+       if (chan_vars->conference.id)
+       {
+-         ast_set_flag(ast_channel_inoflags(chan), MEETME_UNMUTE_ALL);
++         ast_set_flag(ast_channel_inoflags(chan), CONF_UNMUTE_ALL);
+ 
+          if (option_verbose >= 4)
+             ast_verbose(VERBOSE_PREFIX_4 "Unmuting conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
+@@ -735,20 +715,26 @@
+ 	      goto error;
+       }
+    }
+-   else if (trs_cmd.al_int_val1 == 64) //CONF_PLAY
++   else if (trs_cmd.al_int_val1 == 128) //CONF_PLAY
+    {
+       if (chan_vars->conference.id)
+       {
+-         if (ast_test_flag(ast_channel_inoflags(chan), MEETME_DO_PLAY))
++         if (ast_test_flag(ast_channel_inoflags(chan), CONF_DO_PLAY))
+          {
+             ast_log(LOG_NOTICE, "Conference %d ALREADY is playing announcement on ch %s\n", chan_vars->conference.id, ast_channel_name(chan));
+             goto error;
+          }
+          if (option_verbose >= 4)
+             ast_verbose(VERBOSE_PREFIX_4 "Play announcement %s to conference %d on ch %s\n", trs_cmd.al_char_val1, chan_vars->conference.id, ast_channel_name(chan));
+-         ast_clear_flag(ast_channel_inoflags(chan), MEETME_STOP_PLAY);
+-         ast_channel_conf_playann_set(chan, trs_cmd.al_char_val1);
+-         ast_set_flag(ast_channel_inoflags(chan), MEETME_DO_PLAY);
++
++         //Used to be sprintf buf http get files with %2f became 0.000000
++         strncpy(stringp, trs_cmd.prompt_id, sizeof(stringp));
++         if (strchr(stringp, '.') != NULL) *strrchr(stringp, '.') = '\0';
++
++         ast_clear_flag(ast_channel_inoflags(chan), CONF_STOP_PLAY);
++         ast_channel_conf_playann_set(chan, stringp);
++         ast_set_flag(ast_channel_inoflags(chan), CONF_DO_PLAY);
++
+       }
+       else
+       {
+@@ -779,6 +765,7 @@
+ 	ast_vars *chan_vars;
+    char execCmd[15];
+ 	reply_ast trs_reply;
++	char *filename;
+ 
+ 	chan_vars = (ast_vars *) data;
+ 	chan = chan_vars->chan;
+@@ -796,14 +783,39 @@
+ 		ast_log(LOG_WARNING, "Chan is NULL\n");
+ 		return NULL;
+    }
+-   snprintf(execCmd, sizeof(execCmd), "%d,dq%s", chan_vars->conference.id, chan_vars->conference.args);
+-	if ((app = pbx_findapp("MeetMe"))) // application found// AGI RELATED
+-	{
++
++   // Clear CONF_PLAY_END flag in case it was activated
++   ast_channel_lock(chan);
++   ast_clear_flag(ast_channel_inoflags(chan), CONF_PLAY_ENDED);
++   ast_channel_unlock(chan);
++
++   snprintf(execCmd, sizeof(execCmd), "%d", chan_vars->conference.id);
++   if ((app = pbx_findapp("ConfBridge"))) // application found// AGI RELATED
++   {
++      ast_func_write(chan, "CONFBRIDGE(user,announce_only_user)", "no");
++      ast_func_write(chan, "CONFBRIDGE(user,quiet)", "yes");
++      //only if F in chan_vars->conference.args
++      if (strstr(chan_vars->conference.args, "F"))
++         ast_func_write(chan, "CONFBRIDGE(user,dtmf_passthrough)", "yes");
++
++      if (strlen(ast_channel_conf_record(chan)) != 0)
++      {
++         ast_func_write(chan, "CONFBRIDGE(bridge,record_conference)", "yes");
++
++         filename = malloc(strlen(ast_channel_conf_record(chan))+strlen(ast_channel_conf_record_format(chan))+2);
++         strcat(filename,ast_channel_conf_record(chan));
++         strcat(filename,".");
++         strcat(filename,ast_channel_conf_record_format(chan));
++
++         ast_func_write(chan, "CONFBRIDGE(bridge,record_file)", filename);
++      }
++
+       if (option_verbose >= 3)
+          ast_verbose(VERBOSE_PREFIX_3 "Conference_thread created |%s| on channel %s\n", execCmd, ast_channel_name(chan));
+ 		pbx_exec(chan, app, execCmd);
+ 
+-      if (chan_vars->conference.exit) asteriskSendReply(&trs_reply, chan_vars);
++      if (chan_vars->conference.exit)
++         asteriskSendReply(&trs_reply, chan_vars);
+       else
+       {
+          trs_reply.event = UNSOLICITED_EVENT;
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-09-15 15:52:15.545027464 +0100
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-09-22 16:27:49.661137000 +0100
+@@ -198,6 +198,14 @@
+ #define FAX_HANGUP            (1 << 20)
+ #define FAX_PHASE_B           (1 << 21)
+ 
++#define CONF_DO_PLAY          (1 << 22)
++#define CONF_STOP_PLAY        (1 << 23)
++#define CONF_MUTE_USER        (1 << 24)
++#define CONF_UNMUTE_USER      (1 << 25)
++#define CONF_MUTE_ALL         (1 << 26)
++#define CONF_UNMUTE_ALL       (1 << 27)
++#define CONF_PLAY_ENDED       (1 << 28)
++
+ enum ast_bridge_result {
+ 	AST_BRIDGE_COMPLETE = 0,
+ 	AST_BRIDGE_FAILED = -1,
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
+--- asterisk-base-11.3.0/main/bridging.c	2014-09-15 15:52:40.576777677 +0100
++++ asterisk-11.3.0/main/bridging.c	2014-09-26 16:43:30.659560000 +0100
+@@ -926,6 +926,43 @@
+ 	return;
+ }
+ 
++static void *playthreadfunc(void *args)
++{
++   struct ast_bridge_channel *bridge_channel = args;
++   struct ast_format_cap *cap;
++   struct ast_channel *playback_chan;
++   struct ast_channel *underlying_channel;
++
++   if (!(cap = ast_format_cap_alloc_nolock())) {
++      pthread_exit(0);
++   }
++   if (!(playback_chan = ast_request("Bridge", cap, bridge_channel->chan, "pseudo", NULL))) {
++      cap = ast_format_cap_destroy(cap);
++      pthread_exit(0);
++   }
++   cap = ast_format_cap_destroy(cap);
++
++   ast_channel_internal_bridge_set(playback_chan, bridge_channel->bridge);
++
++   if (ast_call(playback_chan, "pseudo", 0)) {
++      ast_hangup(playback_chan);
++      playback_chan = NULL;
++      pthread_exit(0);
++   }
++
++   underlying_channel = ast_channel_tech(playback_chan)->bridged_channel(playback_chan, NULL);
++
++   ast_stream_and_wait(playback_chan, ast_channel_conf_playann(bridge_channel->chan), "");
++
++   ast_bridge_depart(bridge_channel->bridge, underlying_channel);
++   ast_hangup(playback_chan);
++   playback_chan = NULL;
++
++   ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAY_ENDED);
++
++   pthread_exit(0);
++}
++
+ /*! \brief Join a channel to a bridge and handle anything the bridge may want us to do */
+ static enum ast_bridge_channel_state bridge_channel_join(struct ast_bridge_channel *bridge_channel)
+ {
+@@ -999,6 +1036,81 @@
+ 		}
+ 		/* Execute the threading model */
+ 		state = (bridge_channel->bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTITHREADED ? bridge_channel_join_multithreaded(bridge_channel) : bridge_channel_join_singlethreaded(bridge_channel));
++
++      if (ast_test_flag(ast_channel_inoflags(bridge_channel->chan), EXEC_APP_EXIT))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: exit app\n",
++              bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART);
++
++         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), EXEC_APP_EXIT);
++      }
++
++      if(ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_MUTE_USER))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: mute user\n",
++                 bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         bridge_channel->features->mute = 1;
++
++         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_MUTE_USER);
++      }
++
++      if(ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_MUTE_ALL))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: mute all\n",
++                 bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         bridge_channel->bridge->features.mute = 1;
++
++         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_MUTE_ALL);
++      }
++
++      if(ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_UNMUTE_USER))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: unmute user\n",
++                 bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         bridge_channel->features->mute = 0;
++
++         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_UNMUTE_USER);
++      }
++
++      if(ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_UNMUTE_ALL))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: unmute all\n",
++                 bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         bridge_channel->bridge->features.mute = 0;
++
++         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_UNMUTE_ALL);
++      }
++
++      // Play announcement to conference
++      if (ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_DO_PLAY))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: play\n",
++               bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         pthread_attr_t attr;
++         pthread_t playthread;
++
++         pthread_attr_init(&attr);
++         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
++         ast_pthread_create(&playthread, &attr, playthreadfunc, bridge_channel);
++
++         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_DO_PLAY);
++      }
++
++      // Stop conference plays
++      if (ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: stop play\n",
++               bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
++      }
++
+ 		/* Depending on the above state see what we need to do */
+ 		switch (state) {
+ 		case AST_BRIDGE_CHANNEL_STATE_FEATURE:
