@@ -1,0 +1,34 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-10-07 11:35:01.753027533 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2014-10-07 13:59:52.437036766 +0100
+@@ -10369,6 +10369,11 @@
+ 	struct ast_format tmp_fmt;
+ 	/* END UNKNOWN */
+ 
++   /* Ensure hold flags are cleared so that overlapping flags do not conflict */
++   ast_clear_flag(&p->flags[2], SIP_PAGE3_OFFER_ANSWER);
++   /* Set offer/answer default value to sendrecv*/
++   ast_set_flag(&p->flags[2], SIP_PAGE3_OFFER_ANSWER_SENDRECV);
++
+ 	/* Initial check */
+ 	if (!p->rtp) {
+ 		ast_log(LOG_ERROR, "Got SDP but have no RTP session allocated.\n");
+@@ -11303,9 +11308,6 @@
+ {
+ 	int found = FALSE;
+ 
+-   /* Ensure hold flags are cleared so that overlapping flags do not conflict */
+-   ast_clear_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER);
+-
+    if (!strcasecmp(a, "sendonly")) {
+       ast_set_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER_RECVONLY);
+       if (*sendonly == -1)
+@@ -11326,8 +11328,6 @@
+       if (*sendonly == -1)
+          *sendonly = 0;
+       found = TRUE;
+-   } else {
+-      ast_set_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER_SENDRECV);
+    }
+ 
+ 	return found;
