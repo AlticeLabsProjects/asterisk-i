@@ -1,0 +1,15 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-10-13 12:01:36.317528334 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2014-10-13 12:08:58.424777327 +0100
+@@ -24158,6 +24158,11 @@
+ static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, uint32_t seqno)
+ {
+ 	ast_debug(2, "---> Got response on PRACK :: %d \n", resp);
++
++   /* set the branch back to the one before the Prack */
++   p->branch = p->invite_branch;
++   build_via(p);
++
+ 	/* Handle authentication early */
+ 	if (resp == 401 || resp == 407) {
+ 		if (p->options) {
