@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
---- asterisk-base-11.3.0/apps/app_confbridge.c	2014-09-15 15:52:15.629027410 +0100
-+++ asterisk-11.3.0/apps/app_confbridge.c	2014-09-26 16:41:18.176238000 +0100
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2014-10-06 16:17:53.653527424 +0100
++++ asterisk-11.3.0/apps/app_confbridge.c	2014-10-06 16:30:39.600777454 +0100
 @@ -421,15 +421,15 @@
  
  	ast_str_reset(*filename);
@@ -64,8 +64,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  }
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
---- asterisk-base-11.3.0/apps/app_wms.c	2014-09-15 15:52:15.849027331 +0100
-+++ asterisk-11.3.0/apps/app_wms.c	2014-09-26 16:41:17.994307000 +0100
+--- asterisk-base-11.3.0/apps/app_wms.c	2014-10-06 16:17:53.945527502 +0100
++++ asterisk-11.3.0/apps/app_wms.c	2014-10-06 16:30:39.604777297 +0100
 @@ -707,6 +707,29 @@
           }
        }
@@ -97,8 +97,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		if (!who && (data_available < 0) && (chan_vars->ms)) 
        {
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
---- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-09-15 15:52:15.853027017 +0100
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2014-09-26 16:33:27.323426000 +0100
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-10-06 16:17:53.953527410 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-10-06 18:07:18.695807000 +0100
 @@ -453,8 +453,8 @@
     // stop play announcement in conference
     if (chan_vars->conference.id) 
@@ -233,7 +233,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	chan_vars = (ast_vars *) data;
  	chan = chan_vars->chan;
-@@ -796,14 +783,39 @@
+@@ -796,14 +783,42 @@
  		ast_log(LOG_WARNING, "Chan is NULL\n");
  		return NULL;
     }
@@ -269,18 +269,22 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +
        if (option_verbose >= 3)
           ast_verbose(VERBOSE_PREFIX_3 "Conference_thread created |%s| on channel %s\n", execCmd, ast_channel_name(chan));
- 		pbx_exec(chan, app, execCmd);
+-		pbx_exec(chan, app, execCmd);
  
 -      if (chan_vars->conference.exit) asteriskSendReply(&trs_reply, chan_vars);
++      ast_channel_ref(chan); // when calling a new app is necessary to increase the channel ref
++      pbx_exec(chan, app, execCmd);
++      ast_channel_unref(chan);
++
 +      if (chan_vars->conference.exit)
 +         asteriskSendReply(&trs_reply, chan_vars);
        else
        {
           trs_reply.event = UNSOLICITED_EVENT;
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
---- asterisk-base-11.3.0/include/asterisk/channel.h	2014-09-15 15:52:15.545027464 +0100
-+++ asterisk-11.3.0/include/asterisk/channel.h	2014-09-22 16:27:49.661137000 +0100
-@@ -198,6 +198,14 @@
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-10-06 16:17:52.837527437 +0100
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-10-10 10:45:55.903473000 +0100
+@@ -198,6 +198,15 @@
  #define FAX_HANGUP            (1 << 20)
  #define FAX_PHASE_B           (1 << 21)
  
@@ -291,19 +295,51 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +#define CONF_MUTE_ALL         (1 << 26)
 +#define CONF_UNMUTE_ALL       (1 << 27)
 +#define CONF_PLAY_ENDED       (1 << 28)
++#define CONF_PLAYING          (1 << 29)
 +
  enum ast_bridge_result {
  	AST_BRIDGE_COMPLETE = 0,
  	AST_BRIDGE_FAILED = -1,
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/audiohook.c asterisk-11.3.0/main/audiohook.c
+--- asterisk-base-11.3.0/main/audiohook.c	2014-10-06 16:18:16.700777474 +0100
++++ asterisk-11.3.0/main/audiohook.c	2014-10-13 09:22:32.660397000 +0100
+@@ -260,7 +260,7 @@
+ 
+ 	if (!usable_read && !usable_write) {
+ 		/* If both factories are unusable bail out */
+-		ast_debug(1, "Read factory %p and write factory %p both fail to provide %zd samples\n", &audiohook->read_factory, &audiohook->write_factory, samples);
++		// ast_debug(1, "Read factory %p and write factory %p both fail to provide %zd samples\n", &audiohook->read_factory, &audiohook->write_factory, samples);
+ 		return NULL;
+ 	}
+ 
+@@ -293,7 +293,7 @@
+ 			}
+ 		}
+ 	} else {
+-		ast_debug(1, "Failed to get %d samples from read factory %p\n", (int)samples, &audiohook->read_factory);
++		// ast_debug(1, "Failed to get %d samples from read factory %p\n", (int)samples, &audiohook->read_factory);
+ 	}
+ 
+ 	/* Move on to the write factory... if there are enough samples, read them in */
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
---- asterisk-base-11.3.0/main/bridging.c	2014-09-15 15:52:40.576777677 +0100
-+++ asterisk-11.3.0/main/bridging.c	2014-09-26 16:43:30.659560000 +0100
-@@ -926,6 +926,43 @@
+--- asterisk-base-11.3.0/main/bridging.c	2014-10-06 16:18:16.824777409 +0100
++++ asterisk-11.3.0/main/bridging.c	2014-10-10 14:48:07.445843000 +0100
+@@ -46,6 +46,7 @@
+ #include "asterisk/module.h"
+ #include "asterisk/astobj2.h"
+ #include "asterisk/test.h"
++#include "asterisk/sched.h"
+ 
+ static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
+ 
+@@ -926,11 +927,113 @@
  	return;
  }
  
 +static void *playthreadfunc(void *args)
 +{
++   int res = 0;
++   struct ast_frame *fr;
 +   struct ast_bridge_channel *bridge_channel = args;
 +   struct ast_format_cap *cap;
 +   struct ast_channel *playback_chan;
@@ -328,13 +364,74 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +
 +   underlying_channel = ast_channel_tech(playback_chan)->bridged_channel(playback_chan, NULL);
 +
-+   ast_stream_and_wait(playback_chan, ast_channel_conf_playann(bridge_channel->chan), "");
++   ast_stopstream(playback_chan);
 +
-+   ast_bridge_depart(bridge_channel->bridge, underlying_channel);
-+   ast_hangup(playback_chan);
-+   playback_chan = NULL;
++   if (!ast_strlen_zero(ast_channel_conf_playann(bridge_channel->chan))) {
++      res = ast_streamfile(playback_chan, ast_channel_conf_playann(bridge_channel->chan), ast_channel_language(playback_chan));
++      if (!res) {
++         while(ast_channel_stream(playback_chan))
++         {
++            if (!bridge_channel->chan || ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY))
++            {
++               ast_stopstream(playback_chan);
++               break;
++            }
++            res = ast_sched_wait(ast_channel_sched(playback_chan));
++            if ((res < 0) && !ast_channel_timingfunc(playback_chan))
++            {
++               ast_stopstream(playback_chan);
++               break;
++            }
++            if (res < 0) res = 1000;
++            if ((res = ast_waitfor(playback_chan, res)) < 0)
++            {
++               ast_log(LOG_WARNING, "Select failed (%s)\n", strerror(errno));
++               break;
++            }
++            else if (res > 0)
++            {
++               fr = ast_read(playback_chan);
++               if (!fr) break;
 +
-+   ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAY_ENDED);
++               switch(fr->frametype)
++               {
++                  case AST_FRAME_DTMF:
++                     break;
++                  case AST_FRAME_CONTROL:
++                     switch(fr->subclass.integer)
++                     {
++                        case AST_CONTROL_HANGUP:
++                           ast_frfree(fr);
++                           break;
++                        case AST_CONTROL_RINGING:
++                        case AST_CONTROL_ANSWER:
++                        case AST_CONTROL_VIDUPDATE:
++                           /* Unimportant */
++                           break;
++                        default:
++                           ast_log(LOG_WARNING, "Unexpected control subclass '%d'\n", fr->subclass.integer);
++                     }
++                        default: break;
++               }
++               /* Ignore */
++               ast_frfree(fr);
++            }
++            ast_sched_runq(ast_channel_sched(playback_chan));
++         }
++      }
++   }
++
++   ao2_lock(bridge_channel->bridge);
++   ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
++   ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAYING);
++   ao2_unlock(bridge_channel->bridge);
++
++   if(bridge_channel->bridge && underlying_channel)
++   {
++      ast_bridge_depart(bridge_channel->bridge, underlying_channel);
++      ast_hangup(playback_chan);
++      playback_chan = NULL;
++   }
 +
 +   pthread_exit(0);
 +}
@@ -342,7 +439,14 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  /*! \brief Join a channel to a bridge and handle anything the bridge may want us to do */
  static enum ast_bridge_channel_state bridge_channel_join(struct ast_bridge_channel *bridge_channel)
  {
-@@ -999,6 +1036,81 @@
+ 	struct ast_format formats[2];
+ 	enum ast_bridge_channel_state state;
++   pthread_t playthread = NULL;
++
+ 	ast_format_copy(&formats[0], ast_channel_readformat(bridge_channel->chan));
+ 	ast_format_copy(&formats[1], ast_channel_writeformat(bridge_channel->chan));
+ 
+@@ -999,6 +1102,79 @@
  		}
  		/* Execute the threading model */
  		state = (bridge_channel->bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTITHREADED ? bridge_channel_join_multithreaded(bridge_channel) : bridge_channel_join_singlethreaded(bridge_channel));
@@ -403,24 +507,37 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: play\n",
 +               bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
 +
-+         pthread_attr_t attr;
-+         pthread_t playthread;
-+
-+         pthread_attr_init(&attr);
-+         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-+         ast_pthread_create(&playthread, &attr, playthreadfunc, bridge_channel);
++         ast_pthread_create(&playthread, NULL, playthreadfunc, bridge_channel);
 +
 +         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_DO_PLAY);
++
++         ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAYING);
++
 +      }
 +
-+      // Stop conference plays
-+      if (ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY))
-+      {
-+         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: stop play\n",
-+               bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
-+         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
-+      }
++//      // Stop conference plays
++//      if (ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY))
++//      {
++//         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: stop play\n",
++//               bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++//         ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
++//      }
 +
  		/* Depending on the above state see what we need to do */
  		switch (state) {
  		case AST_BRIDGE_CHANNEL_STATE_FEATURE:
+@@ -1024,6 +1200,14 @@
+ 		}
+ 	}
+ 
++   /* if play annoucement thread is running wait for playthread */
++	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END && playthread) {
++      ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
++      ao2_unlock(bridge_channel->bridge);
++      pthread_join(playthread, NULL);
++      ao2_lock(bridge_channel->bridge);
++	}
++	
+ 	ast_channel_internal_bridge_set(bridge_channel->chan, NULL);
+ 
+ 	/* See if we need to dissolve the bridge itself if they hung up */
