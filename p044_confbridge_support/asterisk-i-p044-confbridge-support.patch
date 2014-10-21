@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
---- asterisk-base-11.3.0/apps/app_confbridge.c	2014-10-06 16:17:53.653527424 +0100
-+++ asterisk-11.3.0/apps/app_confbridge.c	2014-10-06 16:30:39.600777454 +0100
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2014-10-21 17:31:48.236777497 +0100
++++ asterisk-11.3.0/apps/app_confbridge.c	2014-10-21 17:39:50.476777309 +0100
 @@ -421,15 +421,15 @@
  
  	ast_str_reset(*filename);
@@ -64,8 +64,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  }
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
---- asterisk-base-11.3.0/apps/app_wms.c	2014-10-06 16:17:53.945527502 +0100
-+++ asterisk-11.3.0/apps/app_wms.c	2014-10-06 16:30:39.604777297 +0100
+--- asterisk-base-11.3.0/apps/app_wms.c	2014-10-21 17:31:48.484777519 +0100
++++ asterisk-11.3.0/apps/app_wms.c	2014-10-21 17:39:50.484777373 +0100
 @@ -707,6 +707,29 @@
           }
        }
@@ -97,8 +97,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		if (!who && (data_available < 0) && (chan_vars->ms)) 
        {
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
---- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-10-06 16:17:53.953527410 +0100
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2014-10-06 18:07:18.695807000 +0100
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-10-21 17:31:48.488777393 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-10-21 17:39:50.488777362 +0100
 @@ -453,8 +453,8 @@
     // stop play announcement in conference
     if (chan_vars->conference.id) 
@@ -282,8 +282,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
        {
           trs_reply.event = UNSOLICITED_EVENT;
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
---- asterisk-base-11.3.0/include/asterisk/channel.h	2014-10-06 16:17:52.837527437 +0100
-+++ asterisk-11.3.0/include/asterisk/channel.h	2014-10-10 10:45:55.903473000 +0100
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-10-21 17:31:48.152777520 +0100
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-10-21 17:39:50.496776987 +0100
 @@ -198,6 +198,15 @@
  #define FAX_HANGUP            (1 << 20)
  #define FAX_PHASE_B           (1 << 21)
@@ -301,8 +301,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	AST_BRIDGE_COMPLETE = 0,
  	AST_BRIDGE_FAILED = -1,
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/audiohook.c asterisk-11.3.0/main/audiohook.c
---- asterisk-base-11.3.0/main/audiohook.c	2014-10-06 16:18:16.700777474 +0100
-+++ asterisk-11.3.0/main/audiohook.c	2014-10-13 09:22:32.660397000 +0100
+--- asterisk-base-11.3.0/main/audiohook.c	2014-10-21 17:32:20.788777425 +0100
++++ asterisk-11.3.0/main/audiohook.c	2014-10-21 17:39:50.504777437 +0100
 @@ -260,7 +260,7 @@
  
  	if (!usable_read && !usable_write) {
@@ -322,8 +322,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	/* Move on to the write factory... if there are enough samples, read them in */
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
---- asterisk-base-11.3.0/main/bridging.c	2014-10-06 16:18:16.824777409 +0100
-+++ asterisk-11.3.0/main/bridging.c	2014-10-10 14:48:07.445843000 +0100
+--- asterisk-base-11.3.0/main/bridging.c	2014-10-21 17:32:20.912777412 +0100
++++ asterisk-11.3.0/main/bridging.c	2014-10-21 17:40:14.000777319 +0100
 @@ -46,6 +46,7 @@
  #include "asterisk/module.h"
  #include "asterisk/astobj2.h"
@@ -332,7 +332,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
  
-@@ -926,11 +927,113 @@
+@@ -926,11 +927,114 @@
  	return;
  }
  
@@ -424,6 +424,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +   ao2_lock(bridge_channel->bridge);
 +   ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
 +   ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAYING);
++   ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAY_ENDED);
 +   ao2_unlock(bridge_channel->bridge);
 +
 +   if(bridge_channel->bridge && underlying_channel)
@@ -446,7 +447,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	ast_format_copy(&formats[0], ast_channel_readformat(bridge_channel->chan));
  	ast_format_copy(&formats[1], ast_channel_writeformat(bridge_channel->chan));
  
-@@ -999,6 +1102,79 @@
+@@ -999,6 +1103,79 @@
  		}
  		/* Execute the threading model */
  		state = (bridge_channel->bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTITHREADED ? bridge_channel_join_multithreaded(bridge_channel) : bridge_channel_join_singlethreaded(bridge_channel));
@@ -526,7 +527,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		/* Depending on the above state see what we need to do */
  		switch (state) {
  		case AST_BRIDGE_CHANNEL_STATE_FEATURE:
-@@ -1024,6 +1200,14 @@
+@@ -1024,6 +1201,14 @@
  		}
  	}
  
