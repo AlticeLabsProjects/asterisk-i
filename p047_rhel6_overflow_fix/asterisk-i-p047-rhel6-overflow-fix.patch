@@ -1,0 +1,12 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel_internal_api.c asterisk-11.3.0/main/channel_internal_api.c
+--- asterisk-base-11.3.0/main/channel_internal_api.c	2014-10-23 10:25:46.709027387 +0100
++++ asterisk-11.3.0/main/channel_internal_api.c	2014-10-23 10:32:26.072782743 +0100
+@@ -725,7 +725,7 @@
+ }
+ void ast_channel_url_params_set(struct ast_channel *chan, char *value)
+ {
+-   snprintf(chan->url_params, sizeof(chan->extradata), "%s", value);
++   snprintf(chan->url_params, sizeof(chan->url_params), "%s", value);
+ }
+ const char *ast_channel_conf_playann(const struct ast_channel *chan)
+ {
