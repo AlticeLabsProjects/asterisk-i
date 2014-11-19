@@ -1,0 +1,112 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-11-17 10:57:21.416017810 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-11-18 17:10:57.070306000 +0000
+@@ -400,6 +400,10 @@
+          close(chan_vars->asr.asr_sock);
+          chan_vars->asr.asr_sock = -1;
+       }
++      if (strlen(trs_cmd.al_char_val1) > 0 )
++      {
++         ast_channel_bye_msg_body_set(chan, trs_cmd.al_char_val1);
++      }
+       if (trs_cmd.al_int_val2 >= 100)
+          ast_channel_hangupcause_set(chan, trs_cmd.al_int_val2);
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2014-11-17 10:57:14.796210090 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2014-11-19 10:59:44.767618000 +0000
+@@ -708,6 +708,10 @@
+ unsigned char isupIAM[] = { 0x01, 0x00, 0x60, 0x01, 0x0a, 0x00 };
+ //--- ISUP End ---
+ 
++/*! \brief Content-Type configuration for BYE message - RFC 5552 4.2
++ *  \note By default, the SIP BYE message body is disabled */
++char bye_mime[128] = "";
++
+ /*! \brief Readable descriptions of device states.
+  *  \note Should be aligned to above table as index */
+ static const struct invstate2stringtable {
+@@ -7435,6 +7439,10 @@
+ 	p->owner = NULL;
+ 	ast_channel_tech_pvt_set(ast, dialog_unref(ast_channel_tech_pvt(ast), "unref ast->tech_pvt"));
+ 
++	/* Check we have a message body - RFC 5552 4.2 */
++	if (!ast_strlen_zero(ast_channel_bye_msg_body(ast)) && strstr(bye_mime, "x-www-form-urlencoded"))
++		ast_string_field_build(p, msg_body, "%s\r\n", ast_channel_bye_msg_body(ast));
++
+ 	ast_module_unref(ast_module_info->self);
+ 	/* Do not destroy this pvt until we have timeout or
+ 	   get an answer to the BYE or INVITE/CANCEL
+@@ -17040,6 +17048,14 @@
+ 		snprintf(buf, sizeof(buf), "%d", p->hangupcause);
+ 		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
+ 		*/
++
++		/* Check if this BYE message has body - RFC 5552 4.2 */
++		if (p->msg_body && p->msg_body[0] != 0) {
++			add_header(&resp, "Content-Type", bye_mime);
++
++			/* XXX Convert \n's to \r\n's XXX */
++			add_content(&resp, p->msg_body);
++		}
+ 		break;
+ 	}
+ 	case SIP_MESSAGE:
+@@ -33320,6 +33336,7 @@
+ 	sip_cfg.peer_rtupdate = TRUE;
+ 	global_dynamic_exclude_static = 0;	/* Exclude static peers */
+ 	sip_cfg.tcp_enabled = FALSE;
++	bye_mime[0] = 0;
+ 
+ 	/* Session-Timers */
+ 	global_st_mode = SESSION_TIMER_MODE_ACCEPT;
+@@ -34006,6 +34023,10 @@
+ 		} else if (!strcasecmp(v->name, "refer_addheaders")) {
+ 			global_refer_addheaders = ast_true(v->value);
+ 		}
++		else if (!strcasecmp(v->name, "bye_mimetype")){ //BYE body mime type
++		   ast_copy_string(bye_mime, v->value, sizeof(bye_mime));
++		   ast_unescape_semicolon(bye_mime);
++		}
+ 	}
+ 
+ 	/* For backwards compatibility the corresponding registration timer value is used if subscription timer value isn't set by configuration */
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2014-11-17 10:57:20.463954087 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2014-11-17 17:22:33.115959295 +0000
+@@ -3954,6 +3954,8 @@
+ void ast_channel_server_sdp_set(struct ast_channel *chan, SDPMedia *value);
+ int ast_channel_defhangcause(const struct ast_channel *chan);
+ void ast_channel_defhangcause_set(struct ast_channel *chan, int value);
++char *ast_channel_bye_msg_body(const struct ast_channel *chan);
++void ast_channel_bye_msg_body_set(struct ast_channel *chan, const char *value);
+ struct ast_flags *ast_channel_inoflags(const struct ast_channel *chan);
+ int ast_channel_charge_type(const struct ast_channel *chan);
+ void ast_channel_charge_type_set(struct ast_channel *chan, int value);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel_internal_api.c asterisk-11.3.0/main/channel_internal_api.c
+--- asterisk-base-11.3.0/main/channel_internal_api.c	2014-11-17 10:58:01.055954190 +0000
++++ asterisk-11.3.0/main/channel_internal_api.c	2014-11-19 10:00:38.421019000 +0000
+@@ -219,6 +219,8 @@
+ 	char dtmf_digit_to_emulate;			/*!< Digit being emulated */
+ 	char sending_dtmf_digit;			/*!< Digit this channel is currently sending out. (zero if not sending) */
+ 	struct timeval sending_dtmf_tv;		/*!< The time this channel started sending the current digit. (Invalid if sending_dtmf_digit is zero.) */
++
++	char bye_msg_body[256];				/*!< Message body for SIP BYE - RFC 5552 4.2*/
+ };
+ 
+ /* AST_DATA definitions, which will probably have to be re-thought since the channel will be opaque */
+@@ -855,6 +857,14 @@
+ {
+    chan->defhangcause = value;
+ }
++char *ast_channel_bye_msg_body(const struct ast_channel *chan)
++{
++   return chan->bye_msg_body;
++}
++void ast_channel_bye_msg_body_set(struct ast_channel *chan, const char *value)
++{
++   ast_copy_string(chan->bye_msg_body, value, sizeof(chan->bye_msg_body));
++}
+ struct ast_flags *ast_channel_inoflags(const struct ast_channel *chan)
+ {
+    return &(chan->inoflags);
