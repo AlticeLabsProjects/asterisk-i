@@ -14,7 +14,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
 --- asterisk-base-11.3.0/channels/chan_sip.c	2014-11-17 10:57:14.796210090 +0000
-+++ asterisk-11.3.0/channels/chan_sip.c	2014-11-19 10:59:44.767618000 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2014-11-25 14:17:46.389559000 +0000
 @@ -708,6 +708,10 @@
  unsigned char isupIAM[] = { 0x01, 0x00, 0x60, 0x01, 0x0a, 0x00 };
  //--- ISUP End ---
@@ -26,24 +26,96 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  /*! \brief Readable descriptions of device states.
   *  \note Should be aligned to above table as index */
  static const struct invstate2stringtable {
+@@ -4809,10 +4813,10 @@
+ 	parse_request(dst);
+ }
+ 
+-/*! \brief add a blank line if no body */
++/*! \brief add a blank line if no body or SIP request is a BYE message - RFC 5552 4.2 */
+ static void add_blank(struct sip_request *req)
+ {
+-	if (!req->lines) {
++	if (!req->lines || (req->method == SIP_BYE && req->embedded_isup != TRUE)) {
+ 		/* Add extra empty return. add_header() reserves 4 bytes so cannot be truncated */
+ 		ast_str_append(&req->data, 0, "\r\n");
+ 	}
 @@ -7435,6 +7439,10 @@
  	p->owner = NULL;
  	ast_channel_tech_pvt_set(ast, dialog_unref(ast_channel_tech_pvt(ast), "unref ast->tech_pvt"));
  
 +	/* Check we have a message body - RFC 5552 4.2 */
-+	if (!ast_strlen_zero(ast_channel_bye_msg_body(ast)) && strstr(bye_mime, "x-www-form-urlencoded"))
-+		ast_string_field_build(p, msg_body, "%s\r\n", ast_channel_bye_msg_body(ast));
++	if (!ast_strlen_zero(ast_channel_bye_msg_body(ast)) && !ast_strlen_zero(bye_mime))
++		ast_string_field_set(p, msg_body, ast_channel_bye_msg_body(ast));
 +
  	ast_module_unref(ast_module_info->self);
  	/* Do not destroy this pvt until we have timeout or
  	   get an answer to the BYE or INVITE/CANCEL
-@@ -17040,6 +17048,14 @@
+@@ -12542,6 +12550,9 @@
+ //--- ISUP ----
+ static int add_isup_content(struct sip_pvt *p, struct sip_request *resp, int isup_msg)
+ {
++	char boundline[128], endbound[128], emptyline[10];
++	char isupcontent[128], byecontent[256], multipartcontent[128];
++
+    // This should only be sent if BYE had ISUP REL msg
+    if (isup_msg == ISUP_MSG_RLC && ast_test_flag(&p->isupflags, ISUP_GOT_REL) &&
+          !ast_test_flag(&p->isupflags, ISUP_ENDED))
+@@ -12563,9 +12574,45 @@
+          //isupREL[5] = 0x80 + p->owner->hangupcause; // hangup_sip2cause
+       }
+       ast_log(LOG_DEBUG, "Sending ISUP REL reason 0x%x\n", isupREL[5]);
+-      add_header(resp, "Content-Type", isupmime);
+-      //add_header_contentLength(resp, sizeof(isupREL));
+-      add_bin_content(resp, isupREL, sizeof(isupREL));
++
++      /* Check if we already have a message body - RFC 5552 4.2 */
++      if (p->msg_body && p->msg_body[0] != 0)
++      {
++         // application/isup
++         //base             protocol                 compatibility
++         //
++         //   itu-t88          ITU-T Q.761-4 (1988)     no
++         //   itu-t92+         ITU-T Q.761-4 (1992)     yes
++
++         snprintf(boundline, sizeof(boundline), "--%s\r\n", multipartboundary);
++         snprintf(byecontent, sizeof(byecontent), "Content-Type: %s\r\n", bye_mime);
++         snprintf(emptyline, sizeof(emptyline), "\r\n");
++         snprintf(isupcontent, sizeof(isupcontent), "Content-Type: %s\r\n", isupmime);
++         snprintf(multipartcontent, sizeof(multipartcontent), "multipart/mixed;boundary=%s", multipartboundary);
++         snprintf(endbound, sizeof(endbound), "--%s--\r\n", multipartboundary);
++
++         // The message will have the multipart content type
++         add_header(resp, "Content-Type", multipartcontent);
++
++         // Add the BYE content limited by boundary lines and then the ISUP message at the end of the BYE
++         add_content(resp, boundline);
++         add_content(resp, byecontent);
++         add_content(resp, emptyline);
++         add_content(resp, p->msg_body);
++         add_content(resp, emptyline);
++         add_content(resp, boundline);
++         add_content(resp, isupcontent);
++         add_content(resp, emptyline);
++         add_bin_content(resp, isupREL, sizeof(isupREL));
++         add_content(resp, emptyline);
++         add_content(resp, endbound);
++      }
++      else
++      {
++         add_header(resp, "Content-Type", isupmime);
++         //add_header_contentLength(resp, sizeof(isupREL));
++         add_bin_content(resp, isupREL, sizeof(isupREL));
++      }
+    }
+    // 180 Ringing
+    else if ((isup_msg == ISUP_MSG_ACM_CHARGE || isup_msg == ISUP_MSG_ACM_NO_CHARGE) && !ast_test_flag(&p->isupflags, ISUP_ACM_SENT))
+@@ -17040,6 +17087,14 @@
  		snprintf(buf, sizeof(buf), "%d", p->hangupcause);
  		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
  		*/
 +
 +		/* Check if this BYE message has body - RFC 5552 4.2 */
-+		if (p->msg_body && p->msg_body[0] != 0) {
++		if (resp.embedded_isup != TRUE && p->msg_body && p->msg_body[0] != 0) {
 +			add_header(&resp, "Content-Type", bye_mime);
 +
 +			/* XXX Convert \n's to \r\n's XXX */
@@ -52,7 +124,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		break;
  	}
  	case SIP_MESSAGE:
-@@ -33320,6 +33336,7 @@
+@@ -33320,6 +33375,7 @@
  	sip_cfg.peer_rtupdate = TRUE;
  	global_dynamic_exclude_static = 0;	/* Exclude static peers */
  	sip_cfg.tcp_enabled = FALSE;
@@ -60,7 +132,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  
  	/* Session-Timers */
  	global_st_mode = SESSION_TIMER_MODE_ACCEPT;
-@@ -34006,6 +34023,10 @@
+@@ -34006,6 +34062,10 @@
  		} else if (!strcasecmp(v->name, "refer_addheaders")) {
  			global_refer_addheaders = ast_true(v->value);
  		}
