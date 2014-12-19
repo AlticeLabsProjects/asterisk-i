@@ -27,13 +27,27 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  }
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-12-19 17:22:40.948453887 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2014-12-19 17:24:43.858177000 +0000
-@@ -802,7 +802,7 @@
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-12-19 17:42:22.180369000 +0000
+@@ -765,7 +765,7 @@
+ 	ast_vars *chan_vars;
+    char execCmd[15];
+ 	reply_ast trs_reply;
+-	char *filename;
++	char filename[URLSTRINGSIZE];
+ 
+ 	chan_vars = (ast_vars *) data;
+ 	chan = chan_vars->chan;
+@@ -801,12 +801,7 @@
+       if (strlen(ast_channel_conf_record(chan)) != 0)
        {
           ast_func_write(chan, "CONFBRIDGE(bridge,record_conference)", "yes");
- 
+-
 -         filename = malloc(strlen(ast_channel_conf_record(chan))+strlen(ast_channel_conf_record_format(chan))+2);
-+         filename = calloc(strlen(ast_channel_conf_record(chan))+strlen(ast_channel_conf_record_format(chan))+2, sizeof(char));
-          strcat(filename,ast_channel_conf_record(chan));
-          strcat(filename,".");
-          strcat(filename,ast_channel_conf_record_format(chan));
+-         strcat(filename,ast_channel_conf_record(chan));
+-         strcat(filename,".");
+-         strcat(filename,ast_channel_conf_record_format(chan));
+-
++         snprintf(filename, sizeof(filename), "%s.%s", ast_channel_conf_record(chan), ast_channel_conf_record_format(chan));
+          ast_func_write(chan, "CONFBRIDGE(bridge,record_file)", filename);
+       }
+ 
