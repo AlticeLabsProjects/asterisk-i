@@ -1,0 +1,39 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2014-12-19 17:22:40.936454074 +0000
++++ asterisk-11.3.0/apps/app_confbridge.c	2014-12-19 17:25:25.274876000 +0000
+@@ -411,7 +411,6 @@
+ {
+ 	char *rec_file = bridge->b_profile.rec_file;
+ 	time_t now;
+-	char *ext;
+ 
+ 	if (ast_str_strlen(*filename)) {
+ 		    return;
+@@ -423,14 +422,7 @@
+ 	if (ast_strlen_zero(rec_file)) {
+ 	   ast_str_set(filename, 0, "confbridge-%s.wav", bridge->name);
+ 	} else {
+-		/* insert time before file extension */
+-		ext = strrchr(rec_file, '.');
+-		if (ext) {
+-			ast_str_set_substr(filename, 0, rec_file, ext - rec_file);
+-			ast_str_append(filename, 0, "%s", ext);
+-		} else {
+-		   ast_str_set(filename, 0, "%s", rec_file);
+-		}
++      ast_str_set(filename, 0, "%s", rec_file);
+ 	}
+ 	ast_str_append(filename, 0, ",a");
+ }
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2014-12-19 17:22:40.948453887 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2014-12-19 17:24:43.858177000 +0000
+@@ -802,7 +802,7 @@
+       {
+          ast_func_write(chan, "CONFBRIDGE(bridge,record_conference)", "yes");
+ 
+-         filename = malloc(strlen(ast_channel_conf_record(chan))+strlen(ast_channel_conf_record_format(chan))+2);
++         filename = calloc(strlen(ast_channel_conf_record(chan))+strlen(ast_channel_conf_record_format(chan))+2, sizeof(char));
+          strcat(filename,ast_channel_conf_record(chan));
+          strcat(filename,".");
+          strcat(filename,ast_channel_conf_record_format(chan));
