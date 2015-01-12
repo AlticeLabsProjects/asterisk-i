@@ -1,0 +1,157 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2015-01-07 10:59:19.563957859 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2015-01-07 12:06:57.439244000 +0000
+@@ -443,6 +443,12 @@
+       chan_vars->fax_thread = AST_PTHREADT_NULL;
+    }
+ 
++   if(chan_vars->conf_thread != AST_PTHREADT_NULL)
++   {
++      pthread_join(chan_vars->conf_thread, NULL);
++      chan_vars->conf_thread = AST_PTHREADT_NULL;
++   }
++
+    shutdown(trs_sock_fd, SHUT_RDWR);
+ 	close(trs_sock_fd);
+ 	trs_sock_fd = -1;
+@@ -1096,69 +1102,10 @@
+       //- Check Terminations ------------
+       check_timeout_terminators(chan, chan_vars);
+ 
+-//- Other checks --------------------------------------------------------------------------------------------------
+-      //- do conference events ---------------------------------------------------------------------------------------
+-      if (chan_vars->conference.id && ast_test_flag(ast_channel_inoflags(chan), MEETME_DO_PLAY))
+-      {
+-         reply_ast trs_reply;
+-
+-         //TODO: This should come in and AST_Text frame or another custom AST_FRAME
+-         if (!strncmp(ast_channel_conf_playann(chan), "-1", 2)) //end of file
+-         {
+-//            ast_verbose(VERBOSE_PREFIX_3 "End of file on play_announcement on conference %d\n", chan_vars->conference.id);
+-            memset(&trs_reply, 0, sizeof(trs_reply));
+-	         trs_reply.cmd_cnt = chan_vars->conference.cmd_cnt;
+-	         trs_reply.con_id = chan_vars->conference.con_id;
+-	         trs_reply.sender = chan_vars->conference.edp_id;
+-	         trs_reply.event = CONFERENCE_MANAGER_COMPLETED;
+-            trs_reply.error = FALSE;
+-            trs_reply.body.g_ret_value = 64; //CONF_PLAY
+-            asteriskSendReply(&trs_reply, chan_vars);
+-            ast_clear_flag(ast_channel_inoflags(chan), MEETME_DO_PLAY);
+-         }
+-         else if (!strncmp(ast_channel_conf_playann(chan), "-2", 2)) //error
+-         {
+-            ast_log(LOG_WARNING, "Error on play_announcement on conference %d\n", chan_vars->conference.id);
+-            memset(&trs_reply, 0, sizeof(trs_reply));
+-	         trs_reply.cmd_cnt = chan_vars->conference.cmd_cnt;
+-	         trs_reply.con_id = chan_vars->conference.con_id;
+-	         trs_reply.sender = chan_vars->conference.edp_id;
+-	         trs_reply.event = CONFERENCE_MANAGER_COMPLETED;
+-            trs_reply.error = TRUE;
+-            trs_reply.body.error_value = RESOURCE_ERROR;
+-            trs_reply.body.g_ret_value = 64; //CONF_PLAY
+-            asteriskSendReply(&trs_reply, chan_vars);
+-            ast_clear_flag(ast_channel_inoflags(chan), MEETME_DO_PLAY);
+-         }
+-      }
+ 	}
+    //- END OF MAIN LOOP -------------------------------------------------------------------
+    stop_action(chan, chan_vars);
+ 
+-   //This must be here or else HANGUP will come before MeetMeLeave and channel: will have garbage
+-   while (chan_vars->conference.id)
+-   {
+-      ++times;
+-
+-      if (chan_vars->conference.id) ast_set_flag(ast_channel_inoflags(chan), EXEC_APP_EXIT);
+-
+-      if (times == 100)  // 10 sec
+-      {
+-         if (option_verbose >= 3)
+-            ast_verbose(VERBOSE_PREFIX_3 "Waited 10 secs for meetme to exit before hanging up\n");
+-      }
+-      if (times == 600) // 30 secs
+-         ast_log(LOG_WARNING, "Waited 1 min for meetme to exit before hanging up\n");
+-      if (times > 6000) // 600 secs
+-      {         
+-         ast_log(LOG_ERROR, "Waited 10 mins for meetme to exit before hanging up. Forcing hangup!\n");
+-
+-         kill_conference_thread(chan_vars);
+-
+-         break;
+-      }
+-      usleep(100000); // 100 milliseconds
+-   }
+ 	if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
+    if (chan_vars->asr.asr_sock > 0)
+ 	{
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2015-01-07 10:59:19.711963347 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2015-01-09 14:18:24.526625000 +0000
+@@ -614,13 +614,11 @@
+ 
+          if (chan_vars->conf_thread != AST_PTHREADT_NULL)
+          {
+-            memset(&chan_vars->conference, 0, sizeof(chan_vars->conference));
+             ast_log(LOG_WARNING, "Thread in use! Ignoring conference %d on ch %03d - %s\n", trs_cmd.al_int_val2, trs_cmd.ch_index, ast_channel_name(chan));
+             goto error;
+          }
+          if (ast_pthread_create_background(&chan_vars->conf_thread, NULL, conference_thread, chan_vars) < 0)
+          {
+-            memset(&chan_vars->conference, 0, sizeof(chan_vars->conference));
+             ast_log(LOG_WARNING, "Thread creation ERROR |%s| for conference %d on ch %03d - %s\n", strerror(errno), trs_cmd.al_int_val2, trs_cmd.ch_index, ast_channel_name(chan));
+             goto error;
+          }
+@@ -825,7 +823,6 @@
+          trs_reply.body.g_ret_value = USER_EXITED_CONFERENCE;
+          asteriskSendReply(&trs_reply, chan_vars);
+       }
+-      memset(&chan_vars->conference, 0, sizeof(chan_vars->conference));
+ 	}
+ 	else // application doesn't exist
+ 	{
+@@ -833,30 +830,12 @@
+ 	   trs_reply.error = TRUE;
+ 	   trs_reply.body.error_value = RESOURCE_ERROR;
+ 	   asteriskSendReply(&trs_reply, chan_vars);
+-      memset(&chan_vars->conference, 0, sizeof(chan_vars->conference));
+ 	}
+-	chan_vars->conf_thread = AST_PTHREADT_NULL;
+ 
+    return NULL;
+ }
+ 
+ /******************************************************************************
+- *        NAME: kill_conference_thread()
+- * DESCRIPTION:
+- *
+- *****************************************************************************/
+-void kill_conference_thread(ast_vars *chan_vars)
+-{
+-   if (chan_vars->conf_thread > AST_PTHREADT_NULL) {
+-      while (pthread_kill(chan_vars->conf_thread, SIGURG) == 0)
+-         sched_yield();
+-      pthread_join(chan_vars->conf_thread, NULL);
+-   }
+-   chan_vars->conf_thread = AST_PTHREADT_STOP;
+-}
+-
+-
+-/******************************************************************************
+  *        NAME: get_digits()
+  * DESCRIPTION: 
+  *              
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
+--- asterisk-base-11.3.0/main/bridging.c	2015-01-07 10:59:56.063954113 +0000
++++ asterisk-11.3.0/main/bridging.c	2015-01-09 13:51:29.355029000 +0000
+@@ -1263,6 +1263,11 @@
+ 	}
+ 
+ 	if (bridge_channel->bridge) {
++      if(bridge_channel->bridge->thread != AST_PTHREADT_NULL)
++      {
++         pthread_join(bridge_channel->bridge->thread, NULL);
++         bridge_channel->bridge->thread = AST_PTHREADT_NULL;
++      }
+ 		ao2_ref(bridge_channel->bridge, -1);
+ 		bridge_channel->bridge = NULL;
+ 	}
