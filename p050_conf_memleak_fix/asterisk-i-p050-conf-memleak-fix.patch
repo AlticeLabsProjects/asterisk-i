@@ -1,6 +1,18 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2015-01-23 09:45:17.759958137 +0000
++++ asterisk-11.3.0/apps/app_confbridge.c	2015-01-23 10:46:07.415953493 +0000
+@@ -424,7 +424,7 @@
+ 	} else {
+       ast_str_set(filename, 0, "%s", rec_file);
+ 	}
+-	ast_str_append(filename, 0, ",a");
++	//ast_str_append(filename, 0, ",a");
+ }
+ 
+ static void *record_thread(void *obj)
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
---- asterisk-base-11.3.0/apps/app_wms.c	2015-01-07 10:59:19.563957859 +0000
-+++ asterisk-11.3.0/apps/app_wms.c	2015-01-07 12:06:57.439244000 +0000
+--- asterisk-base-11.3.0/apps/app_wms.c	2015-01-23 09:45:17.755954265 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2015-01-23 10:30:53.779953489 +0000
 @@ -443,6 +443,12 @@
        chan_vars->fax_thread = AST_PTHREADT_NULL;
     }
@@ -85,8 +97,8 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
     if (chan_vars->asr.asr_sock > 0)
  	{
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
---- asterisk-base-11.3.0/apps/wms_inoapi.c	2015-01-07 10:59:19.711963347 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2015-01-09 14:18:24.526625000 +0000
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2015-01-23 09:45:17.763954294 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2015-01-23 10:30:53.799953884 +0000
 @@ -614,13 +614,11 @@
  
           if (chan_vars->conf_thread != AST_PTHREADT_NULL)
@@ -141,17 +153,112 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
   * DESCRIPTION: 
   *              
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
---- asterisk-base-11.3.0/main/bridging.c	2015-01-07 10:59:56.063954113 +0000
-+++ asterisk-11.3.0/main/bridging.c	2015-01-09 13:51:29.355029000 +0000
-@@ -1263,6 +1263,11 @@
- 	}
+--- asterisk-base-11.3.0/main/bridging.c	2015-01-23 09:45:53.071953700 +0000
++++ asterisk-11.3.0/main/bridging.c	2015-01-23 10:43:51.197587000 +0000
+@@ -394,7 +394,7 @@
+ 	ast_debug(1, "Ending bridge thread for %p\n", bridge);
  
- 	if (bridge_channel->bridge) {
-+      if(bridge_channel->bridge->thread != AST_PTHREADT_NULL)
-+      {
-+         pthread_join(bridge_channel->bridge->thread, NULL);
-+         bridge_channel->bridge->thread = AST_PTHREADT_NULL;
-+      }
+ 	/* Indicate the bridge thread is no longer active */
+-	bridge->thread = AST_PTHREADT_NULL;
++	//bridge->thread = AST_PTHREADT_NULL;
+ 	ao2_unlock(bridge);
+ 
+ 	ao2_ref(bridge, -1);
+@@ -459,6 +459,15 @@
+ 	/* Last but not least clean up the features configuration */
+ 	ast_bridge_features_cleanup(&bridge->features);
+ 
++	if (bridge->thread != AST_PTHREADT_NULL) {
++		pthread_t thread = bridge->thread;
++		bridge->stop = 1;
++		bridge_poke(bridge);
++		ao2_unlock(bridge);
++		pthread_join(thread, NULL);
++		ao2_lock(bridge);
++	}
++
+ 	/* Drop the array of channels */
+ 	ast_free(bridge->array);
+ 
+@@ -1266,6 +1275,12 @@
  		ao2_ref(bridge_channel->bridge, -1);
  		bridge_channel->bridge = NULL;
  	}
++
++    if(bridge_channel->thread != AST_PTHREADT_NULL) {
++       pthread_join(bridge_channel->thread, NULL);
++       bridge_channel->thread = AST_PTHREADT_NULL;
++    }
++
+ 	/* Destroy elements of the bridge channel structure and the bridge channel structure itself */
+ 	ast_cond_destroy(&bridge_channel->cond);
+ }
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2015-01-23 09:45:53.023959376 +0000
++++ asterisk-11.3.0/main/channel.c	2015-01-23 10:41:28.178692000 +0000
+@@ -5956,6 +5956,7 @@
+ 
+ 	if (AST_RWLIST_RDLOCK(&backends)) {
+ 		ast_log(LOG_WARNING, "Unable to lock technology backend list\n");
++		ast_string_field_free_memory(mg);
+ 		return NULL;
+ 	}
+ 
+@@ -5983,6 +5984,7 @@
+ 					ast_getformatname_multiple(tmp2, sizeof(tmp2), request_cap));
+ 				*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
+ 				AST_RWLIST_UNLOCK(&backends);
++				ast_string_field_free_memory(mg);
+ 				return NULL;
+ 			}
+ 		}
+@@ -5993,6 +5995,7 @@
+ 		 * a better choice to send all the audio formats capable of being translated
+ 		 * during the request and allow the channel drivers to pick the best one. */
+ 		if (!(joint_cap = ast_format_cap_dup(request_cap))) {
++			ast_string_field_free_memory(mg);
+ 			return NULL;
+ 		}
+ 		ast_format_cap_remove_bytype(joint_cap, AST_FORMAT_TYPE_AUDIO);
+@@ -6003,6 +6006,7 @@
+       {
+          if (!(c = chan->tech->_requester(type, joint_cap, requestor, addr, cause, mg))) {
+             ast_format_cap_destroy(joint_cap);
++            ast_string_field_free_memory(mg);
+             return NULL;
+          }
+       }
+@@ -6010,11 +6014,13 @@
+       {
+          if (!(c = chan->tech->requester(type, joint_cap, requestor, addr, cause))) {
+             ast_format_cap_destroy(joint_cap);
++            ast_string_field_free_memory(mg);
+             return NULL;
+          }
+       }
+       else
+       {
++    	 ast_string_field_free_memory(mg);
+          return NULL;
+       }
+ 
+@@ -6043,9 +6049,11 @@
+ 			ast_log(LOG_WARNING, "Setting security requirements failed\n");
+ 			c = ast_channel_release(c);
+ 			*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
++			ast_string_field_free_memory(mg);
+ 			return NULL;
+ 		}
+ 
++		ast_string_field_free_memory(mg);
+ 		/* no need to generate a Newchannel event here; it is done in the channel_alloc call */
+ 		return c;
+ 	}
+@@ -6054,6 +6062,7 @@
+ 	*cause = AST_CAUSE_NOSUCHDRIVER;
+ 	AST_RWLIST_UNLOCK(&backends);
+ 
++	ast_string_field_free_memory(mg);
+ 	return NULL;
+ }
+ 
