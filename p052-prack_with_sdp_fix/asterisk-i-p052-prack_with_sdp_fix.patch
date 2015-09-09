@@ -1,0 +1,17 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2015-09-08 14:46:53.835673698 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2015-09-09 12:02:12.071673519 +0100
+@@ -26844,7 +26844,12 @@
+ 		ast_debug(2, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
+ 	}
+ 	append_history(p, "PRACK", "PRACK received Rseq %u", rseq);
+-	transmit_response(p, "200 OK", req);
++
++	if (find_sdp(req))
++		transmit_response_with_sdp(p, "200 OK", req, XMIT_UNRELIABLE, FALSE, TRUE);
++	else
++		transmit_response(p, "200 OK", req);
++
+ 	if (ast_test_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK)) {
+ 		/* If the response sent reliably contained an SDP, we're not allowed to  answer
+ 		   until we have a PRACK response 
