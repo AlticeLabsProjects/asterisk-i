@@ -1,0 +1,12 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2017-09-12 15:30:04.877995938 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2017-09-15 16:08:46.242495478 +0100
+@@ -5272,7 +5272,7 @@
+ 	if (!text) {
+ 		return 0;
+ 	}
+-	if(!is_method_allowed(&dialog->allowed_methods, SIP_MESSAGE)) {
++	if(!is_method_allowed(&dialog->allowed_methods, SIP_MESSAGE) && !is_method_allowed(&dialog->allowed_methods, SIP_INFO)) {
+ 		ast_debug(2, "Trying to send MESSAGE to device that does not support it.\n");
+ 		return 0;
+ 	}
