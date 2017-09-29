@@ -1,0 +1,19 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2017-09-12 15:30:13.269995744 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2017-09-27 11:20:20.626245536 +0100
+@@ -1044,6 +1044,15 @@
+       {
+          if (ast_streamfile(chan, stringp, ast_channel_language(chan)) == 0)
+ 		   {
++			   // Apply initial offset (al_int_val1) in announcement
++			   if(trs_cmd.al_int_val1 > 0)
++			   {
++				   if(ast_stream_fastforward(ast_channel_stream(chan), trs_cmd.al_int_val1) < 0)
++				   {
++					   ast_log(LOG_WARNING, "Unable to apply initial offset in announcement\n");
++					   return;
++				   }
++			   }
+ 			   build_action(chan_vars, &trs_cmd, ACTION_PLAANN, ret_evt);
+ 			   if (trs_cmd.clear_dig_buf) 
+                memset(chan_vars->digit_buffer, 0, sizeof(chan_vars->digit_buffer));

@@ -1,0 +1,210 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
+--- asterisk-base-11.3.0/apps/vsrvdefs.h	2017-09-27 15:51:26.762000946 +0100
++++ asterisk-11.3.0/apps/vsrvdefs.h	2017-09-27 16:10:13.855285000 +0100
+@@ -37,7 +37,7 @@
+ 
+ #define	DIGIT_LENGTH			   128		//GC_ADDRSIZE    // 128
+ #define MAX_CALLID_LEN           64
+-#define URLSTRINGSIZE            256
++#define URLSTRINGSIZE            512
+ #define NUM_ACCEPTED_CODECS      20
+ #define MAXTERMCOND              10  // maximum number of non ASR termination conditions
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2017-09-27 15:51:17.166495414 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2017-09-28 14:54:19.161308000 +0100
+@@ -12281,7 +12281,7 @@
+ /*! \brief Prepare SIP response packet */
+ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg, const struct sip_request *req)
+ {
+-	char newto[256];
++	RAII_VAR(char *, rptobuf, NULL, ast_free);
+ 	const char *ot;
+ 
+ 	init_resp(resp, msg);
+@@ -12294,12 +12294,12 @@
+ 		/* Add the proper tag if we don't have it already.  If they have specified
+ 		   their tag, use it.  Otherwise, use our own tag */
+ 		if (!ast_strlen_zero(p->theirtag) && ast_test_flag(&p->flags[0], SIP_OUTGOING))
+-			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, p->theirtag);
++			ast_asprintf(&rptobuf, "%s;tag=%s", ot, p->theirtag);
+ 		else if (p->tag && !ast_test_flag(&p->flags[0], SIP_OUTGOING))
+-			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, p->tag);
++			ast_asprintf(&rptobuf, "%s;tag=%s", ot, p->tag);
+ 		else
+-			ast_copy_string(newto, ot, sizeof(newto));
+-		ot = newto;
++			rptobuf = ast_strdup(ot);
++		ot = rptobuf;
+ 	}
+ 	add_header(resp, "To", ot);
+ 	copy_header(resp, req, "Call-ID");
+@@ -12418,7 +12418,7 @@
+ 	struct sip_request *orig = &p->initreq;
+ 	char stripped[80];
+ 	char tmp[80];
+-	char newto[256];
++	RAII_VAR(char *, rqtobuf, NULL, ast_free);
+ 	const char *c;
+ 	const char *ot, *of;
+ 	int is_strict = FALSE;		/*!< Strict routing flag */
+@@ -12499,12 +12499,12 @@
+ 		/* Add the proper tag if we don't have it already.  If they have specified
+ 		   their tag, use it.  Otherwise, use our own tag */
+ 		if (is_outbound && !ast_strlen_zero(p->theirtag))
+-			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, p->theirtag);
++			ast_asprintf(&rqtobuf, "%s;tag=%s", ot, p->theirtag);
+ 		else if (!is_outbound)
+-			snprintf(newto, sizeof(newto), "%s;tag=%s", ot, p->tag);
++			ast_asprintf(&rqtobuf, "%s;tag=%s", ot, p->tag);
+ 		else
+-			snprintf(newto, sizeof(newto), "%s", ot);
+-		ot = newto;
++			ast_asprintf(&rqtobuf, "%s", ot);
++		ot = rqtobuf;
+ 	}
+ 
+ 	if (is_outbound) {
+@@ -12974,12 +12974,12 @@
+ */
+ static int get_domain(const char *str, char *domain, int len)
+ {
+-	char tmpf[256];
++	RAII_VAR(char *, tfbuf, NULL, ast_free);
+ 	char *a, *from;
+ 
+ 	*domain = '\0';
+-	ast_copy_string(tmpf, str, sizeof(tmpf));
+-	from = get_in_brackets(tmpf);
++	tfbuf = ast_strdup(str);
++	from = get_in_brackets(tfbuf);
+ 	if (!ast_strlen_zero(from)) {
+ 		if (strncasecmp(from, "sip:", 4) && strncasecmp(from, "tel:", 4)) {
+ 			ast_log(LOG_WARNING, "Huh?  Not a SIP header (%s)?\n", from);
+@@ -14980,8 +14980,8 @@
+ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, const char * const explicit_uri)
+ {
+ 	struct ast_str *invite = ast_str_alloca(256);
+-	char from[256], asserted_id[256];
+-	char to[256];
++	char from[512], asserted_id[256];
++	char to[512];
+ 	char tmp_n[SIPBUFSIZE/2];	/* build a local copy of 'n' if needed */
+ 	char tmp_l[SIPBUFSIZE/2];	/* build a local copy of 'l' if needed */
+ 	const char *l = NULL;	/* XXX what is this, exactly ? */
+@@ -16888,7 +16888,7 @@
+ /*! \brief Allocate SIP refer structure */
+ static int sip_refer_alloc(struct sip_pvt *p)
+ {
+-	p->refer = ast_calloc_with_stringfields(1, struct sip_refer, 512);
++	p->refer = ast_calloc_with_stringfields(1, struct sip_refer, 1024);
+ 	return p->refer ? 1 : 0;
+ }
+ 
+@@ -16909,10 +16909,10 @@
+ */
+ static int transmit_refer(struct sip_pvt *p, const char *dest)
+ {
+-	char from[256];
++	char from[512];
+ 	const char *of;
+ 	char *c;
+-	char referto[256];
++	char referto[512];
+ 	int	use_tls=FALSE;
+ 
+ 	if (sipdebug) {
+@@ -19067,16 +19067,17 @@
+ /*--- get_to: get To: ---*/
+ static int get_to(struct sip_pvt *p, struct sip_request *oreq)
+ {
+-   char tmp[256], *c, *a;
++   char *c, *a;
++   RAII_VAR(char *, tobuf, NULL, ast_free);
+    struct sip_request *req;
+ 
+    req = oreq;
+    if (!req)
+       req = &p->initreq;
+-   ast_copy_string(tmp, sip_get_header(req, "To"), sizeof(tmp));
+-   if (ast_strlen_zero(tmp))
++   tobuf = ast_strdup(sip_get_header(req, "To"));
++   if (ast_strlen_zero(tobuf))
+       return 0;
+-   c = get_in_brackets(tmp);
++   c = get_in_brackets(tobuf);
+ 
+    if (!strncasecmp(c, "sip:", 4) || !strncasecmp(c, "tel:", 4)) {
+       c += 4;
+@@ -19216,7 +19217,8 @@
+ static enum sip_get_dest_result get_destination(struct sip_pvt *p, struct sip_request *oreq, int *cc_recall_core_id)
+ {
+ 	char tmp[256] = "", *uri, *unused_password, *domain;
+-	char tmpf[256] = "", *from = NULL;
++	RAII_VAR(char *, tmpf, NULL, ast_free);
++	char *from = NULL;
+ 	struct sip_request *req;
+ 	char *decoded_uri;
+ 
+@@ -19257,7 +19259,7 @@
+ 	/* XXX Why is this done in get_destination? Isn't it already done?
+ 	   Needs to be checked
+         */
+-	ast_copy_string(tmpf, sip_get_header(req, "From"), sizeof(tmpf));
++	tmpf = ast_strdup(sip_get_header(req, "From"));
+ 	if (!ast_strlen_zero(tmpf)) {
+ 		from = get_in_brackets(tmpf);
+ 		if (parse_uri_legacy_check(from, "sip:,sips:,tel:", &from, NULL, &domain, NULL)) {
+@@ -20096,18 +20098,20 @@
+ 					      int sipmethod, const char *uri, enum xmittype reliable,
+ 					      struct ast_sockaddr *addr, struct sip_peer **authpeer)
+ {
+-	char from[256] = "", *of, *name, *unused_password, *domain;
++	char *of, *name, *unused_password, *domain;
++	RAII_VAR(char *, ofbuf, NULL, ast_free); /* beware, everyone starts pointing to this */
++	RAII_VAR(char *, namebuf, NULL, ast_free);
+ 	enum check_auth_result res = AUTH_DONT_KNOW;
+ 	char calleridname[50];
+ 	char *uri2 = ast_strdupa(uri);
+ 
+ 	terminate_uri(uri2);	/* trim extra stuff */
+ 
+-	ast_copy_string(from, sip_get_header(req, "From"), sizeof(from));
++	ofbuf = ast_strdup(sip_get_header(req, "From"));
+ 	/* XXX here tries to map the username for invite things */
+ 
+ 	/* strip the display-name portion off the beginning of the FROM header. */
+-	if (!(of = (char *) get_calleridname(from, calleridname, sizeof(calleridname)))) {
++	if (!(of = (char *) get_calleridname(ofbuf, calleridname, sizeof(calleridname)))) {
+ 		ast_log(LOG_ERROR, "FROM header can not be parsed \n");
+ 		return res;
+ 	}
+@@ -20184,8 +20188,7 @@
+ 		}
+ 
+ 		if (!ast_strlen_zero(hdr) && (hdr = strstr(hdr, "username=\""))) {
+-			ast_copy_string(from, hdr + strlen("username=\""), sizeof(from));
+-			name = from;
++			namebuf = name = ast_strdup(hdr + strlen("username=\""));
+ 			name = strsep(&name, "\"");
+ 		}
+ 	}
+@@ -35024,14 +35027,14 @@
+ 	/* we'll issue the redirect message here */
+ 	if (!domain) {
+ 		char *local_to_header;
+-		char to_header[256];
++		RAII_VAR(char *, rtobuf, NULL, ast_free);
+ 
+-		ast_copy_string(to_header, sip_get_header(&p->initreq, "To"), sizeof(to_header));
+-		if (ast_strlen_zero(to_header)) {
++		rtobuf = ast_strdup(sip_get_header(&p->initreq, "To"));
++		if (ast_strlen_zero(rtobuf)) {
+ 			ast_log(LOG_ERROR, "Cannot retrieve the 'To' header from the original SIP request!\n");
+ 			return 0;
+ 		}
+-		if (((local_to_header = strcasestr(to_header, "sip:")) || (local_to_header = strcasestr(to_header, "sips:")))
++		if (((local_to_header = strcasestr(rtobuf, "sip:")) || (local_to_header = strcasestr(rtobuf, "sips:")))
+ 			&& (local_to_header = strchr(local_to_header, '@'))) {
+ 			char ldomain[256];
+ 
