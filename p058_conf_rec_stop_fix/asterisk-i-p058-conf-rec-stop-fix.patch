@@ -1,0 +1,53 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2018-02-19 13:50:51.521952093 +0000
++++ asterisk-11.3.0/apps/app_confbridge.c	2018-02-28 10:33:01.426201671 +0000
+@@ -557,6 +557,7 @@
+ 	cap = ast_format_cap_destroy(cap);
+ 
+ 	conference_bridge->record_state = CONF_RECORD_START;
++	conference_bridge->record_start_time = ast_tvnow();
+ 	ast_mutex_lock(&conference_bridge->record_lock);
+ 	ast_cond_signal(&conference_bridge->record_cond);
+ 	ast_mutex_unlock(&conference_bridge->record_lock);
+@@ -1088,6 +1089,30 @@
+ 
+ void conf_ended(struct conference_bridge *conference_bridge)
+ {
++	unsigned int rec_thread_wait = 100000; /* sleep period in microsecs */
++
++	/* Checkout for recordings with duration < 1s because the mixmonitor thread may still be starting up */
++	if (conference_bridge->record_chan && conf_is_recording(conference_bridge) && ast_tvdiff_ms(ast_tvnow(), conference_bridge->record_start_time) < 1000) {
++		/* If we cannot access the record_lock the thread is already running */
++		if (ast_mutex_trylock(&conference_bridge->record_lock)) {
++			ast_log(LOG_NOTICE, "End of recording delayed due to early termination on %s \n", ast_channel_name(conference_bridge->record_chan));
++			/* The mixmonitor app still needs to be launched */
++			usleep(rec_thread_wait);
++        	} else {
++			/* Wait twice as long but give another try and continue anyway - Let us assume the thread never started */
++			ast_mutex_unlock(&conference_bridge->record_lock);
++			usleep(rec_thread_wait);
++
++			if (ast_mutex_trylock(&conference_bridge->record_lock)) {
++                        	ast_log(LOG_NOTICE, "End of recording delayed twice due to early termination on %s\n", ast_channel_name(conference_bridge->record_chan));
++	                } else {
++				ast_mutex_unlock(&conference_bridge->record_lock);
++				ast_log(LOG_WARNING, "End of recording delayed twice due to early termination on %s\n", ast_channel_name(conference_bridge->record_chan));
++			}
++			usleep(rec_thread_wait);	
++		}
++	}
++
+ 	/* Called with a reference to conference_bridge */
+ 	ao2_unlink(conference_bridges, conference_bridge);
+ 	send_conf_end_event(conference_bridge->name);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/confbridge/include/confbridge.h asterisk-11.3.0/apps/confbridge/include/confbridge.h
+--- asterisk-base-11.3.0/apps/confbridge/include/confbridge.h	2018-02-19 13:50:51.177951748 +0000
++++ asterisk-11.3.0/apps/confbridge/include/confbridge.h	2018-02-27 14:53:14.962356393 +0000
+@@ -219,6 +219,7 @@
+ 	ast_cond_t record_cond;                                           /*!< Recording condition variable */
+ 	AST_LIST_HEAD_NOLOCK(, conference_bridge_user) active_list;       /*!< List of users participating in the conference bridge */
+ 	AST_LIST_HEAD_NOLOCK(, conference_bridge_user) waiting_list;      /*!< List of users waiting to join the conference bridge */
++	struct timeval record_start_time;                                 /*!< Time when the recording was issued */
+ };
+ 
+ struct post_join_action {
