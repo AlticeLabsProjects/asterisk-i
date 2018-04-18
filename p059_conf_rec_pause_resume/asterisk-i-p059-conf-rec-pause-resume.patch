@@ -1,0 +1,595 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2018-02-28 16:05:03.018566882 +0000
++++ asterisk-11.3.0/apps/app_confbridge.c	2018-03-22 15:17:26.217707233 +0000
+@@ -257,6 +257,28 @@
+ 		<description>
+ 		</description>
+ 	</manager>
++	<manager name="ConfbridgePauseRecord" language="en_US">
++		<synopsis>
++			Pause recording a Confbridge conference.
++		</synopsis>
++		<syntax>
++			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
++			<parameter name="Conference" required="true" />
++		</syntax>
++		<description>
++		</description>
++	</manager>
++	<manager name="ConfbridgeResumeRecord" language="en_US">
++		<synopsis>
++			Resume recording a Confbridge conference.
++		</synopsis>
++		<syntax>
++			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
++			<parameter name="Conference" required="true" />
++		</syntax>
++		<description>
++		</description>
++	</manager>
+ 	<manager name="ConfbridgeSetSingleVideoSrc" language="en_US">
+ 		<synopsis>
+ 			Set a conference user as the single video source distributed to all other participants.
+@@ -596,6 +618,41 @@
+ 	return 0;
+ }
+ 
++/*! \brief Pause recording a conference bridge
++ * \internal
++ * \param conference_bridge The conference bridge on which to pause the recording
++ * \retval -1 Failure
++ * \retval 0 Success
++ */
++static int conf_pause_record(struct conference_bridge *conference_bridge)
++{
++	if (conference_bridge->record_thread == AST_PTHREADT_NULL || !conf_is_recording(conference_bridge)) {
++		return -1;
++	}
++	ast_set_flag(ast_channel_conf_rec_flags(conference_bridge->record_chan), CONF_REC_PAUSED);
++	ast_test_suite_event_notify("CONF_PAUSE_RECORD", "Message: paused conference recording channel\r\nConference: %s", conference_bridge->b_profile.name);
++
++	return 0;
++}
++
++/*! \brief Resume recording a conference bridge
++ * \internal
++ * \param conference_bridge The conference bridge on which to resume the recording
++ * \retval -1 Failure
++ * \retval 0 Success
++ */
++static int conf_resume_record(struct conference_bridge *conference_bridge)
++{
++	if (conference_bridge->record_thread == AST_PTHREADT_NULL || !conf_is_recording(conference_bridge)) {
++		return -1;
++	}
++	ast_clear_flag(ast_channel_conf_rec_flags(conference_bridge->record_chan), CONF_REC_PAUSED);
++	ast_test_suite_event_notify("CONF_RESUME_RECORD", "Message: resumed conference recording channel\r\nConference: %s", conference_bridge->b_profile.name);
++
++	return 0;
++}
++
++
+ static void send_conf_start_event(const char *conf_name)
+ {
+ 	/*** DOCUMENTATION
+@@ -2498,6 +2555,78 @@
+ 	return CLI_SUCCESS;
+ }
+ 
++static char *handle_cli_confbridge_pause_record(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
++{
++	struct conference_bridge *bridge = NULL;
++	struct conference_bridge tmp;
++	int ret;
++
++	switch (cmd) {
++	case CLI_INIT:
++		e->command = "confbridge record pause";
++		e->usage =
++			"Usage: confbridge record pause <conference>\n";
++		return NULL;
++	case CLI_GENERATE:
++		if (a->pos == 3) {
++			return complete_confbridge_name(a->line, a->word, a->pos, a->n);
++		}
++		return NULL;
++	}
++	if (a->argc != 4) {
++		return CLI_SHOWUSAGE;
++	}
++
++	ast_copy_string(tmp.name, a->argv[3], sizeof(tmp.name));
++	bridge = ao2_find(conference_bridges, &tmp, OBJ_POINTER);
++	if (!bridge) {
++		ast_cli(a->fd, "Conference not found.\n");
++		return CLI_SUCCESS;
++	}
++	ao2_lock(bridge);
++	ret = conf_pause_record(bridge);
++	ao2_unlock(bridge);
++	ast_cli(a->fd, "Recording %spaused.\n", ret ? "could not be " : "");
++	ao2_ref(bridge, -1);
++	return CLI_SUCCESS;
++}
++
++static char *handle_cli_confbridge_resume_record(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
++{
++	struct conference_bridge *bridge = NULL;
++	struct conference_bridge tmp;
++	int ret;
++
++	switch (cmd) {
++	case CLI_INIT:
++		e->command = "confbridge record resume";
++		e->usage =
++			"Usage: confbridge record resume <conference>\n";
++		return NULL;
++	case CLI_GENERATE:
++		if (a->pos == 3) {
++			return complete_confbridge_name(a->line, a->word, a->pos, a->n);
++		}
++		return NULL;
++	}
++	if (a->argc != 4) {
++		return CLI_SHOWUSAGE;
++	}
++
++	ast_copy_string(tmp.name, a->argv[3], sizeof(tmp.name));
++	bridge = ao2_find(conference_bridges, &tmp, OBJ_POINTER);
++	if (!bridge) {
++		ast_cli(a->fd, "Conference not found.\n");
++		return CLI_SUCCESS;
++	}
++	ao2_lock(bridge);
++	ret = conf_resume_record(bridge);
++	ao2_unlock(bridge);
++	ast_cli(a->fd, "Recording %sresumed.\n", ret ? "could not be " : "");
++	ao2_ref(bridge, -1);
++	return CLI_SUCCESS;
++}
++
+ static struct ast_cli_entry cli_confbridge[] = {
+ 	AST_CLI_DEFINE(handle_cli_confbridge_list, "List conference bridges and participants."),
+ 	AST_CLI_DEFINE(handle_cli_confbridge_kick, "Kick participants out of conference bridges."),
+@@ -2507,6 +2636,8 @@
+ 	AST_CLI_DEFINE(handle_cli_confbridge_unlock, "Unlock a conference."),
+ 	AST_CLI_DEFINE(handle_cli_confbridge_start_record, "Start recording a conference"),
+ 	AST_CLI_DEFINE(handle_cli_confbridge_stop_record, "Stop recording a conference."),
++	AST_CLI_DEFINE(handle_cli_confbridge_pause_record, "Pause recording a conference."),
++	AST_CLI_DEFINE(handle_cli_confbridge_resume_record, "Resume recording a conference."),
+ };
+ static struct ast_custom_function confbridge_function = {
+ 	.name = "CONFBRIDGE",
+@@ -2843,6 +2974,76 @@
+ 	astman_send_ack(s, m, "Conference Recording Stopped.");
+ 	return 0;
+ }
++static int action_confbridgepauserecord(struct mansession *s, const struct message *m)
++{
++	const char *conference = astman_get_header(m, "Conference");
++	struct conference_bridge *bridge = NULL;
++	struct conference_bridge tmp;
++
++	if (ast_strlen_zero(conference)) {
++		astman_send_error(s, m, "No Conference name provided.");
++		return 0;
++	}
++	if (!ao2_container_count(conference_bridges)) {
++		astman_send_error(s, m, "No active conferences.");
++		return 0;
++	}
++
++	ast_copy_string(tmp.name, conference, sizeof(tmp.name));
++	bridge = ao2_find(conference_bridges, &tmp, OBJ_POINTER);
++	if (!bridge) {
++		astman_send_error(s, m, "No Conference by that name found.");
++		return 0;
++	}
++
++	ao2_lock(bridge);
++	if (conf_is_recording(bridge)) {
++		ao2_unlock(bridge);
++		ao2_ref(bridge, -1);
++		ast_set_flag(ast_channel_conf_rec_flags(bridge->record_chan), CONF_REC_PAUSED);
++		astman_send_ack(s, m, "Conference Recording Paused.");
++		return 0;
++	}
++	ao2_unlock(bridge);
++	ao2_ref(bridge, -1);
++	astman_send_error(s, m, "Conference is not being recorded.");
++	return 0;
++}
++static int action_confbridgeresumerecord(struct mansession *s, const struct message *m)
++{
++	const char *conference = astman_get_header(m, "Conference");
++	struct conference_bridge *bridge = NULL;
++	struct conference_bridge tmp;
++
++	if (ast_strlen_zero(conference)) {
++		astman_send_error(s, m, "No Conference name provided.");
++		return 0;
++	}
++	if (!ao2_container_count(conference_bridges)) {
++		astman_send_error(s, m, "No active conferences.");
++		return 0;
++	}
++
++	ast_copy_string(tmp.name, conference, sizeof(tmp.name));
++	bridge = ao2_find(conference_bridges, &tmp, OBJ_POINTER);
++	if (!bridge) {
++		astman_send_error(s, m, "No Conference by that name found.");
++		return 0;
++	}
++
++	ao2_lock(bridge);
++	if (conf_is_recording(bridge)) {
++		ao2_unlock(bridge);
++		ao2_ref(bridge, -1);
++		ast_clear_flag(ast_channel_conf_rec_flags(bridge->record_chan), CONF_REC_PAUSED);
++		astman_send_ack(s, m, "Conference Recording Resumed.");
++		return 0;
++	}
++	ao2_unlock(bridge);
++	ao2_ref(bridge, -1);
++	astman_send_error(s, m, "Conference is not being recorded.");
++	return 0;
++}
+ 
+ static int action_confbridgesetsinglevideosrc(struct mansession *s, const struct message *m)
+ {
+@@ -3032,6 +3233,8 @@
+ 	res |= ast_manager_unregister("ConfbridgeStartRecord");
+ 	res |= ast_manager_unregister("ConfbridgeStopRecord");
+ 	res |= ast_manager_unregister("ConfbridgeSetSingleVideoSrc");
++	res |= ast_manager_unregister("ConfbridgePauseRecord");
++	res |= ast_manager_unregister("ConfbridgeResumeRecord");
+ 
+ 	return res;
+ }
+@@ -3079,6 +3282,8 @@
+ 	res |= ast_manager_register_xml("ConfbridgeStartRecord", EVENT_FLAG_CALL, action_confbridgestartrecord);
+ 	res |= ast_manager_register_xml("ConfbridgeStopRecord", EVENT_FLAG_CALL, action_confbridgestoprecord);
+ 	res |= ast_manager_register_xml("ConfbridgeSetSingleVideoSrc", EVENT_FLAG_CALL, action_confbridgesetsinglevideosrc);
++	res |= ast_manager_register_xml("ConfbridgePauseRecord", EVENT_FLAG_CALL, action_confbridgepauserecord);
++	res |= ast_manager_register_xml("ConfbridgeResumeRecord", EVENT_FLAG_CALL, action_confbridgeresumerecord);
+ 	if (res) {
+ 		return AST_MODULE_LOAD_FAILURE;
+ 	}
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_mixmonitor.c asterisk-11.3.0/apps/app_mixmonitor.c
+--- asterisk-base-11.3.0/apps/app_mixmonitor.c	2018-02-19 13:50:51.293951877 +0000
++++ asterisk-11.3.0/apps/app_mixmonitor.c	2018-03-29 11:16:40.358201866 +0100
+@@ -57,6 +57,8 @@
+ #include "asterisk/linkedlists.h"
+ #include "asterisk/test.h"
+ 
++#include <sys/stat.h>
++
+ /*** DOCUMENTATION
+ 	<application name="MixMonitor" language="en_US">
+ 		<synopsis>
+@@ -601,6 +603,7 @@
+ 	unsigned int oflags;
+ 	int errflag = 0;
+ 	struct ast_format format_slin;
++	int paused = 0;
+ 
+ 	/* Keep callid association before any log messages */
+ 	if (mixmonitor->callid) {
+@@ -645,10 +648,16 @@
+ 		ast_audiohook_unlock(&mixmonitor->audiohook);
+ 
+ 		if (!ast_test_flag(mixmonitor, MUXFLAG_BRIDGED) || (mixmonitor->autochan->chan && ast_bridged_channel(mixmonitor->autochan->chan))) {
++			paused = ast_test_flag(ast_channel_conf_rec_flags(mixmonitor->autochan->chan), CONF_REC_PAUSED);
+ 			ast_mutex_lock(&mixmonitor->mixmonitor_ds->lock);
+ 
++			/* If the recording was paused, just touch the file */
++			if ((paused) && (*fs) && (fr)) {
++				futimens(fileno((*fs)->f), NULL);
++			}
++
+ 			/* Write out the frame(s) */
+-			if ((*fs_read) && (fr_read)) {
++			if (!(paused) && (*fs_read) && (fr_read)) {
+ 				struct ast_frame *cur;
+ 
+ 				for (cur = fr_read; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+@@ -656,7 +665,7 @@
+ 				}
+ 			}
+ 
+-			if ((*fs_write) && (fr_write)) {
++			if (!(paused) && (*fs_write) && (fr_write)) {
+ 				struct ast_frame *cur;
+ 
+ 				for (cur = fr_write; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+@@ -664,7 +673,7 @@
+ 				}
+ 			}
+ 
+-			if ((*fs) && (fr)) {
++			if (!(paused) && (*fs) && (fr)) {
+ 				struct ast_frame *cur;
+ 
+ 				for (cur = fr; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2018-02-19 13:50:51.545951913 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2018-04-05 14:56:10.406439801 +0100
+@@ -591,7 +591,7 @@
+  *****************************************************************************/
+ static void run_asterisk_channel(struct ast_channel *chan, ast_vars *chan_vars)
+ {
+-   int times = 0, data_available = 0, numcs = 0;
++   int times = 0, data_available = 0, numcs = 0, len = 0;
+    struct ast_channel *tempcs[2], *who;
+    struct ast_frame *f;
+    cmd_ast trs_cmd;
+@@ -734,6 +734,39 @@
+             ast_clear_flag(ast_channel_inoflags(chan), CONF_PLAY_ENDED);
+             ast_channel_unlock(chan);
+          }
++
++         if (ast_test_flag(ast_channel_inoflags(chan), CONF_SIP_INFO))
++         {
++            if (option_verbose >= 4)
++               ast_verbose(VERBOSE_PREFIX_4 "Received Text in conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
++
++            memset(&trs_reply, 0, sizeof(trs_reply));
++            trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
++            trs_reply.con_id = trs_cmd.con_id;
++            trs_reply.sender = trs_cmd.edp_id;
++            trs_reply.event = UNSOLICITED_EVENT;
++            trs_reply.evt_type = SIP_INFO; 
++            trs_reply.error = FALSE;
++
++            len = strlen((char *)ast_channel_info_msg_body(chan));
++            if (sizeof(trs_reply.body.userData) < len + 3) // 2 x ESC + 1 x \0
++            {
++               ast_log(LOG_NOTICE, "AST_FRAME_TEXT size in conference bigger than buffer on channel %s\n", ast_channel_name(chan));
++
++               snprintf(trs_reply.body.userData, sizeof(trs_reply.body.userData) - 1,
++                  "%c%s", 27, (char *)ast_channel_info_msg_body(chan)); // writes "\ESC + data + \0" and leaves space for the last \ESC
++               strcat(trs_reply.body.userData, "\033");
++            }
++            // size = 1 (\ESC) + len + 1 (\ESC) + \ (\0) = len + 3
++            else snprintf(trs_reply.body.userData, len + 3, "%c%s%c", 27, (char *)ast_channel_info_msg_body(chan), 27);
++
++            asteriskSendReply(&trs_reply, chan_vars);
++
++            ast_channel_lock(chan);
++            ast_clear_flag(ast_channel_inoflags(chan), CONF_SIP_INFO);
++            ast_channel_unlock(chan);
++         }
++
+       }
+ 
+       who = ast_waitfor_nandfds(tempcs, numcs, &chan_vars->trs_fd, 1, NULL, &data_available, &chan_vars->ms);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2018-02-19 13:50:51.561951891 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2018-04-05 15:00:50.445701857 +0100
+@@ -591,6 +591,7 @@
+                   ast_channel_conf_record_format_set(chan, end + 1);
+                   *end = '\0';
+                   ast_channel_conf_record_set(chan, temp_record);
++                  ast_set_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE);
+ 
+                   break;
+ 
+@@ -744,6 +745,61 @@
+ 	      goto error;
+       }
+    }
++   else if (trs_cmd.al_int_val1 == 256) //CONF_RECORD
++   {
++      if (chan_vars->conference.id)
++      {
++         ast_verb(2, "Record %s operation on conference %d on ch %s\n", trs_cmd.al_char_val1, chan_vars->conference.id, ast_channel_name(chan));
++
++         if (!strcasecmp(trs_cmd.al_char_val1, "pause"))
++         {
++            if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE))
++            {
++               if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSED))
++               {
++                  ast_log(LOG_NOTICE, "Record pause issued on already paused recording conference %d on ch %s\n", chan_vars->conference.id, ast_channel_name(chan));
++               }
++               else
++               {
++                  ast_set_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSE);
++                  ast_clear_flag(ast_channel_conf_rec_flags(chan), CONF_REC_RESUME);
++               }
++            }
++            else
++            {
++               ast_log(LOG_NOTICE, "Record pause issued on non-recording conference %d on ch %s\n", chan_vars->conference.id, ast_channel_name(chan));
++               goto error;
++            }
++         }
++         else if (!strcasecmp(trs_cmd.al_char_val1, "resume"))
++         {
++            if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSED))
++            {
++               ast_set_flag(ast_channel_conf_rec_flags(chan), CONF_REC_RESUME);
++               ast_clear_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSE);
++            }
++            else
++            {
++               if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE))
++               {
++                  ast_log(LOG_NOTICE, "Record resume issued on already recording conference %d on ch %s\n", chan_vars->conference.id, ast_channel_name(chan));
++               }
++               else
++               {
++                  ast_log(LOG_NOTICE, "Record resume issued on non-recording conference %d on ch %s\n", chan_vars->conference.id, ast_channel_name(chan));
++                  goto error;
++               }
++            }
++         }
++        
++         asteriskSendReply(&trs_reply, chan_vars);
++      }
++      else
++      {
++         ast_log(LOG_NOTICE, "User not in conference on ch %03d - %s\n", trs_cmd.ch_index, ast_channel_name(chan));
++	      goto error;
++      }
++   }
+    else
+    {
+ 	   goto error;
+@@ -789,6 +845,13 @@
+    // Clear CONF_PLAY_END flag in case it was activated
+    ast_channel_lock(chan);
+    ast_clear_flag(ast_channel_inoflags(chan), CONF_PLAY_ENDED);
++   // Clear SIP INFO flag
++   ast_clear_flag(ast_channel_inoflags(chan), CONF_SIP_INFO);
++   // Clear flags for recording operations
++   ast_clear_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSE);
++   ast_clear_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSED);
++   ast_clear_flag(ast_channel_conf_rec_flags(chan), CONF_REC_RESUME);
++   ast_clear_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE);
+    ast_channel_unlock(chan);
+ 
+    snprintf(execCmd, sizeof(execCmd), "%d", chan_vars->conference.id);
+@@ -805,6 +868,9 @@
+          ast_func_write(chan, "CONFBRIDGE(bridge,record_conference)", "yes");
+          snprintf(filename, sizeof(filename), "%s.%s", ast_channel_conf_record(chan), ast_channel_conf_record_format(chan));
+          ast_func_write(chan, "CONFBRIDGE(bridge,record_file)", filename);
++         ast_channel_lock(chan);
++         ast_set_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE);
++         ast_channel_unlock(chan);
+       }
+ 
+       if (option_verbose >= 3)
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2018-02-19 13:50:46.462202099 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2018-04-05 14:57:13.263040076 +0100
+@@ -23172,7 +23172,8 @@
+ 		return;
+ 		//--- application/msml+xml ----------
+ 		//--- application/mscml ----------
+-	} else if (!strcasecmp(c, "application/amsml+xml") ||
++	} else if (!strcasecmp(c, "text/plain") ||
++	      !strcasecmp(c, "application/amsml+xml") ||
+ 	      !strcasecmp(c, "application/msml+xml") ||
+ 	      !strcasecmp(c, "application/moml+xml") ||
+ 	      !strcasecmp(c, "application/mscml")) {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2018-02-19 13:50:51.021951944 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2018-03-28 18:21:17.637701803 +0100
+@@ -207,6 +207,15 @@
+ #define CONF_PLAY_ENDED       (1 << 28)
+ #define CONF_PLAYING          (1 << 29)
+ 
++#define CONF_SIP_INFO         (1 << 30)
++
++/* Specific flags to support recording pause/resume in ConfBridge */
++#define CONF_REC_ACTIVE       (1 << 1)
++#define CONF_REC_PAUSED       (1 << 2)
++#define CONF_REC_PAUSE        (1 << 3)
++#define CONF_REC_RESUME       (1 << 4)
++
++
+ enum ast_bridge_result {
+ 	AST_BRIDGE_COMPLETE = 0,
+ 	AST_BRIDGE_FAILED = -1,
+@@ -3956,6 +3965,9 @@
+ void ast_channel_defhangcause_set(struct ast_channel *chan, int value);
+ char *ast_channel_bye_msg_body(const struct ast_channel *chan);
+ void ast_channel_bye_msg_body_set(struct ast_channel *chan, const char *value);
++char *ast_channel_info_msg_body(const struct ast_channel *chan);
++void ast_channel_info_msg_body_set(struct ast_channel *chan, const char *value);
++struct ast_flags *ast_channel_conf_rec_flags(const struct ast_channel *chan);
+ struct ast_flags *ast_channel_inoflags(const struct ast_channel *chan);
+ int ast_channel_charge_type(const struct ast_channel *chan);
+ void ast_channel_charge_type_set(struct ast_channel *chan, int value);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
+--- asterisk-base-11.3.0/main/bridging.c	2018-02-19 13:51:25.573701706 +0000
++++ asterisk-11.3.0/main/bridging.c	2018-03-28 18:23:14.997951899 +0100
+@@ -312,6 +312,15 @@
+ 			if (frame && dtmf_passthrough) {
+ 				bridge->technology->write(bridge, bridge_channel, frame);
+ 			}
++		} else if(frame->frametype == AST_FRAME_TEXT) {
++			ast_verb(2, "Text Frame received on bridge channel %p\n", bridge_channel);
++			if(1024 > (frame->datalen + 3)) // 2 x ESC + 1 x \0
++			{
++				ast_channel_info_msg_body_set(bridge_channel->chan, frame->data.ptr);
++				ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_SIP_INFO);
++			} else {
++				ast_log(LOG_WARNING, "Failed to handle large Text Frame on channel %s\n", ast_channel_name(bridge_channel->chan));
++			}
+ 		} else {
+ 			/* Simply write the frame out to the bridge technology if it still exists */
+ 			bridge->technology->write(bridge, bridge_channel, frame);
+@@ -1163,6 +1172,39 @@
+          ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_UNMUTE_ALL);
+       }
+ 
++      // Conf recording operations (pause/resume) specific flags
++      if(ast_test_flag(ast_channel_conf_rec_flags(bridge_channel->chan), CONF_REC_PAUSE))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: pause rec\n",
++                 bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         // propagate the PAUSED flag towards all the channels
++         struct ast_bridge_channel *bc = NULL;
++         AST_LIST_TRAVERSE(&bridge_channel->bridge->channels, bc, entry) {
++                 if (bc->chan) {
++                        ast_set_flag(ast_channel_conf_rec_flags(bc->chan), CONF_REC_PAUSED);
++                 }
++         }
++
++         ast_clear_flag(ast_channel_conf_rec_flags(bridge_channel->chan), CONF_REC_PAUSE);
++      }
++
++      if(ast_test_flag(ast_channel_conf_rec_flags(bridge_channel->chan), CONF_REC_RESUME))
++      {
++         ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: active rec\n",
++                 bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
++
++         // clear the PAUSED flag through all the channels
++         struct ast_bridge_channel *bc = NULL;
++         AST_LIST_TRAVERSE(&bridge_channel->bridge->channels, bc, entry) {
++                 if (bc->chan) {
++                        ast_clear_flag(ast_channel_conf_rec_flags(bc->chan), CONF_REC_PAUSED);
++                 }
++         }
++
++         ast_clear_flag(ast_channel_conf_rec_flags(bridge_channel->chan), CONF_REC_RESUME);
++      }
++
+       // Play announcement to conference
+       if (ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_DO_PLAY))
+       {
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel_internal_api.c asterisk-11.3.0/main/channel_internal_api.c
+--- asterisk-base-11.3.0/main/channel_internal_api.c	2018-02-19 13:51:25.533701783 +0000
++++ asterisk-11.3.0/main/channel_internal_api.c	2018-03-20 11:37:57.105701871 +0000
+@@ -221,6 +221,9 @@
+ 	struct timeval sending_dtmf_tv;		/*!< The time this channel started sending the current digit. (Invalid if sending_dtmf_digit is zero.) */
+ 
+ 	char bye_msg_body[256];				/*!< Message body for SIP BYE - RFC 5552 4.2*/
++
++	char info_msg_body[AST_MAX_PARAMS];		/*!< Message body for SIP INFO - For user defined protocols */
++	struct ast_flags conf_rec_flags;		/*!< ConfBridge flags for recording operations */
+ };
+ 
+ /* AST_DATA definitions, which will probably have to be re-thought since the channel will be opaque */
+@@ -865,6 +868,18 @@
+ {
+    ast_copy_string(chan->bye_msg_body, value, sizeof(chan->bye_msg_body));
+ }
++char *ast_channel_info_msg_body(const struct ast_channel *chan)
++{
++   return chan->info_msg_body;
++}
++void ast_channel_info_msg_body_set(struct ast_channel *chan, const char *value)
++{
++   ast_copy_string(chan->info_msg_body, value, sizeof(chan->info_msg_body));
++}
++struct ast_flags *ast_channel_conf_rec_flags(const struct ast_channel *chan)
++{
++   return &(chan->conf_rec_flags);
++}
+ struct ast_flags *ast_channel_inoflags(const struct ast_channel *chan)
+ {
+    return &(chan->inoflags);
