@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
 --- asterisk-base-11.3.0/main/bridging.c	2018-03-28 18:23:14.997951899 +0100
-+++ asterisk-11.3.0/main/bridging.c	2018-04-27 13:22:44.162235392 +0100
++++ asterisk-11.3.0/main/bridging.c	2018-04-30 11:27:03.490236364 +0100
 @@ -1041,6 +1041,8 @@
        ast_bridge_depart(bridge_channel->bridge, underlying_channel);
        ast_hangup(playback_chan);
@@ -15,7 +15,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
                 bridge_channel->bridge, ast_channel_name(bridge_channel->chan));
  
 +         /* if play annoucement thread is running (previous play) wait for playthread */
-+         if (playthread) {
++         if (playthread && playthread != AST_PTHREADT_NULL) {
 +               ao2_unlock(bridge_channel->bridge);
 +               pthread_join(playthread, NULL);
 +               playthread = AST_PTHREADT_NULL;
@@ -25,7 +25,12 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
           ast_pthread_create(&playthread, NULL, playthreadfunc, bridge_channel);
  
           ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_DO_PLAY);
-@@ -1257,6 +1267,7 @@
+@@ -1253,10 +1263,11 @@
+ 	}
+ 
+    /* if play annoucement thread is running wait for playthread */
+-	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END && playthread) {
++	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END && playthread && playthread != AST_PTHREADT_NULL) {
        ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
        ao2_unlock(bridge_channel->bridge);
        pthread_join(playthread, NULL);
