@@ -1,0 +1,12 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_mixmonitor.c asterisk-11.3.0/apps/app_mixmonitor.c
+--- asterisk-base-11.3.0/apps/app_mixmonitor.c	2018-07-19 16:18:19.209144545 +0100
++++ asterisk-11.3.0/apps/app_mixmonitor.c	2018-07-20 09:43:28.643105567 +0100
+@@ -653,7 +653,7 @@
+ 
+ 			/* If the recording was paused, just touch the file */
+ 			if ((paused) && (*fs) && (fr)) {
+-				futimens(fileno((*fs)->f), NULL);
++				futimes(fileno((*fs)->f), NULL);
+ 			}
+ 
+ 			/* Write out the frame(s) */
