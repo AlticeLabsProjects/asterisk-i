@@ -1,0 +1,12 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
+--- asterisk-base-11.3.0/apps/wms_aux.c	2018-11-13 00:16:28.875372059 +0000
++++ asterisk-11.3.0/apps/wms_aux.c	2018-11-13 00:28:12.935357366 +0000
+@@ -399,7 +399,7 @@
+    else if (chan_vars->action.type == ACTION_ROUEND)
+ 	{
+ 	   if (chan_vars->action.record != NULL) ast_closestream(chan_vars->action.record);	                  
+-	   if (!chan_vars->shutdown)
++	   if (!chan_vars->shutdown && !chan_vars->trs_reply.body.terminator.stopped)
+ 		   asteriskSendReply(&chan_vars->trs_reply, chan_vars);
+ 
+       if (chan_vars->action.cs[0]) ast_channel_internal_bridged_channel_set(chan_vars->action.cs[0], NULL);
