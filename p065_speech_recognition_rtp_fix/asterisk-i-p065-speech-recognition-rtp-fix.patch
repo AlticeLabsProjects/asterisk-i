@@ -1,0 +1,16 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
+--- asterisk-base-11.3.0/apps/wms_aux.c	2018-11-13 01:42:29.180368527 +0000
++++ asterisk-11.3.0/apps/wms_aux.c	2018-11-14 01:32:23.244311603 +0000
+@@ -508,6 +508,12 @@
+ 		}
+ 
+ 		payload = rtp_frame->subclass.integer;
++
++		// The frame is translated into G.711 for delivery to the speech engine (integer and format have the same data - union)
++		if(rtp_frame->subclass.integer == AST_FORMAT_ULAW)
++			payload = 0;
++		else if(rtp_frame->subclass.integer == AST_FORMAT_ALAW)
++			payload = 8;
+ 		
+ 		// Default prediction
+ 			pred = chan_vars->asr.asr_lastts + ms * 8;
