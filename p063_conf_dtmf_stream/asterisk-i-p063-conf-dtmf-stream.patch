@@ -1,0 +1,89 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2018-11-08 22:12:49.022613673 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2018-11-09 03:02:50.640613208 +0000
+@@ -737,30 +737,38 @@
+ 
+          if (ast_test_flag(ast_channel_inoflags(chan), CONF_SIP_INFO))
+          {
+-            if (option_verbose >= 4)
+-               ast_verbose(VERBOSE_PREFIX_4 "Received Text in conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
+-
+-            memset(&trs_reply, 0, sizeof(trs_reply));
+-            trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
+-            trs_reply.con_id = trs_cmd.con_id;
+-            trs_reply.sender = trs_cmd.edp_id;
+-            trs_reply.event = UNSOLICITED_EVENT;
+-            trs_reply.evt_type = SIP_INFO; 
+-            trs_reply.error = FALSE;
+-
+-            len = strlen((char *)ast_channel_info_msg_body(chan));
+-            if (sizeof(trs_reply.body.userData) < len + 3) // 2 x ESC + 1 x \0
+-            {
+-               ast_log(LOG_NOTICE, "AST_FRAME_TEXT size in conference bigger than buffer on channel %s\n", ast_channel_name(chan));
+-
+-               snprintf(trs_reply.body.userData, sizeof(trs_reply.body.userData) - 1,
+-                  "%c%s", 27, (char *)ast_channel_info_msg_body(chan)); // writes "\ESC + data + \0" and leaves space for the last \ESC
+-               strcat(trs_reply.body.userData, "\033");
++            if (!strncasecmp((char *)ast_channel_info_msg_body(chan),"Signal", 6))
++            {
++               // Process digits built through dtmf-relay protocol
++               process_digit(chan, chan_vars, (int)(ast_channel_info_msg_body(chan)[7]));
+             }
+-            // size = 1 (\ESC) + len + 1 (\ESC) + \ (\0) = len + 3
+-            else snprintf(trs_reply.body.userData, len + 3, "%c%s%c", 27, (char *)ast_channel_info_msg_body(chan), 27);
++            else
++            {
++               if (option_verbose >= 4)
++                  ast_verbose(VERBOSE_PREFIX_4 "Received Text in conference %d on ch %03d - %s\n", chan_vars->conference.id, trs_cmd.ch_index, ast_channel_name(chan));
++
++               memset(&trs_reply, 0, sizeof(trs_reply));
++               trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
++               trs_reply.con_id = trs_cmd.con_id;
++               trs_reply.sender = trs_cmd.edp_id;
++               trs_reply.event = UNSOLICITED_EVENT;
++               trs_reply.evt_type = SIP_INFO; 
++               trs_reply.error = FALSE;
+ 
+-            asteriskSendReply(&trs_reply, chan_vars);
++               len = strlen((char *)ast_channel_info_msg_body(chan));
++               if (sizeof(trs_reply.body.userData) < len + 3) // 2 x ESC + 1 x \0
++               {
++                  ast_log(LOG_NOTICE, "AST_FRAME_TEXT size in conference bigger than buffer on channel %s\n", ast_channel_name(chan));
++
++                  snprintf(trs_reply.body.userData, sizeof(trs_reply.body.userData) - 1,
++                     "%c%s", 27, (char *)ast_channel_info_msg_body(chan)); // writes "\ESC + data + \0" and leaves space for the last \ESC
++                  strcat(trs_reply.body.userData, "\033");
++               }
++               // size = 1 (\ESC) + len + 1 (\ESC) + \ (\0) = len + 3
++               else snprintf(trs_reply.body.userData, len + 3, "%c%s%c", 27, (char *)ast_channel_info_msg_body(chan), 27);
++
++               asteriskSendReply(&trs_reply, chan_vars);
++            }
+ 
+             ast_channel_lock(chan);
+             ast_clear_flag(ast_channel_inoflags(chan), CONF_SIP_INFO);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
+--- asterisk-base-11.3.0/main/bridging.c	2018-11-08 22:12:48.781613673 +0000
++++ asterisk-11.3.0/main/bridging.c	2018-11-09 01:04:28.978606610 +0000
+@@ -285,6 +285,8 @@
+ 
+ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_channel *chan, int outfd)
+ {
++	char dtmfrelay[32];
++
+ 	/* If no bridge channel has been provided and the actual channel has been provided find it */
+ 	if (chan && !bridge_channel) {
+ 		bridge_channel = find_bridge_channel(bridge, chan);
+@@ -307,6 +309,12 @@
+ 
+ 			if (frame->frametype == AST_FRAME_DTMF_BEGIN) {
+ 				frame = bridge_handle_dtmf(bridge, bridge_channel, frame);
++
++				/* Build dtmf-relay SIP INFO and notify the WMS App */
++				sprintf(dtmfrelay, "Signal=%c\nDuration=180\n", frame->subclass.integer);
++				ast_verb(2, "DTMF (%c) received on bridge channel %p\n", frame->subclass.integer, bridge_channel);
++				ast_channel_info_msg_body_set(bridge_channel->chan, dtmfrelay);
++				ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_SIP_INFO);
+ 			}
+ 
+ 			if (frame && dtmf_passthrough) {
