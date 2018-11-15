@@ -1,0 +1,58 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2018-07-19 16:16:57.531106043 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2018-07-24 18:33:28.636724833 +0100
+@@ -955,6 +955,10 @@
+  */
+ static int sipdebug_text;
+ 
++/*! \brief Disable the detection of DTMF via SIP INFO.
++ *  Other frames with Content-Type aside from dtmf and dtmf-relay keep being forwarded. */
++static int global_dtmf_info_detect;
++
+ static const struct _map_x_s referstatusstrings[] = {
+ 	{ REFER_IDLE,      "<none>" },
+ 	{ REFER_SENT,      "Request sent" },
+@@ -22494,6 +22498,7 @@
+ 	ast_cli(a->fd, "  Early media focus:      %s\n", AST_CLI_YESNO(sip_cfg.early_media_focus));
+ 	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
+ 	ast_cli(a->fd, "  PRACK support:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_PRACK)));
++	ast_cli(a->fd, "  DTMF INFO detect:       %s\n", AST_CLI_YESNO(global_dtmf_info_detect));
+ 
+ 	ast_cli(a->fd, "\nDefault Settings:\n");
+ 	ast_cli(a->fd, "-----------------\n");
+@@ -23109,6 +23114,12 @@
+ 			buf = get_content(req);
+ 		}
+ 
++		/* If detection is disabled and we are not sending DTMF via INFO just send a 200 OK */
++		if (global_dtmf_info_detect == FALSE && !ast_test_flag(&p->flags[0], SIP_DTMF_INFO) && !ast_test_flag(&p->flags[0], SIP_DTMF_SHORTINFO)) {
++			transmit_response(p, "200 OK", req);
++			return;
++		}
++
+ 		/* An empty message body requires us to send a 200 OK */
+ 		if (ast_strlen_zero(buf)) {
+ 			transmit_response(p, "200 OK", req);
+@@ -33472,6 +33483,7 @@
+ 	min_expiry = DEFAULT_MIN_EXPIRY;
+ 	max_expiry = DEFAULT_MAX_EXPIRY;
+ 	default_expiry = DEFAULT_DEFAULT_EXPIRY;
++	global_dtmf_info_detect = TRUE;
+ 
+ 	sip_cfg.matchexternaddrlocally = DEFAULT_MATCHEXTERNADDRLOCALLY;
+ 
+@@ -34096,6 +34108,14 @@
+ 		else if (!strcasecmp(v->name, "bye_mimetype")){ //BYE body mime type
+ 		   ast_copy_string(bye_mime, v->value, sizeof(bye_mime));
+ 		   ast_unescape_semicolon(bye_mime);
++		} else if (!strcasecmp(v->name, "dtmf_info_detect")) {
++			if (ast_false(v->value)) {
++				global_dtmf_info_detect = FALSE;
++				if (ast_test_flag(&global_flags[0], SIP_DTMF_INFO) || ast_test_flag(&global_flags[0], SIP_DTMF_SHORTINFO)) {
++					ast_log(LOG_WARNING, "dtmfmode=%s. dtmf_info_detect=no at line %d will be ignored.\n",
++						ast_test_flag(&global_flags[0], SIP_DTMF_INFO) ? "info" : "shortinfo", v->lineno);
++				}
++			}
+ 		}
+ 	}
+ 
