@@ -1,0 +1,20 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2019-03-04 12:24:02.330397261 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2019-03-04 12:33:43.096526139 +0000
+@@ -26487,14 +26487,11 @@
+ 			success = FALSE;
+ 			break;
+ 		default:
+-		   if (respcode == 100) {
+-		      success = TRUE;
+-		      break;
+-		   }
+-
+ 			if (respcode < 200) {
+ 				/* ignore provisional responses */
+ 				success = -1;
++				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
++				ast_verbose("Received provisional response to REFER. Scheduled destruction of the dialog\n");
+ 			} else {
+ 				ast_log(LOG_NOTICE, "Got unknown code '%d' in NOTIFY in response to REFER.\n", respcode);
+ 				success = FALSE;
