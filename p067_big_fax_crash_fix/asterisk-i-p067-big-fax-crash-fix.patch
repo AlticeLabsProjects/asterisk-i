@@ -1,0 +1,21 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_fax_spandsp.c asterisk-11.3.0/res/res_fax_spandsp.c
+--- asterisk-base-11.3.0/res/res_fax_spandsp.c	2019-03-21 14:41:13.068867736 +0000
++++ asterisk-11.3.0/res/res_fax_spandsp.c	2019-03-21 14:49:26.604165611 +0000
+@@ -418,7 +418,7 @@
+    struct ast_fax_session *s = data;
+    t30_stats_t stats;
+    const char *s_chid;
+-   char s_total_size[8];
++   char s_total_size[16];
+    t30_get_transfer_statistics(t30_state, &stats);
+    int s_result = T30_ERR_OK;
+ 
+@@ -511,7 +511,7 @@
+ 	const char *c;
+ 	t30_stats_t stats;
+ 	const char *s_chid;
+-	char s_pages[8], s_size[8], s_error[8];
++	char s_pages[16], s_size[16], s_error[16];
+ 
+ 	ast_verb(3, "FAX session entering phase E\n");
+ 
