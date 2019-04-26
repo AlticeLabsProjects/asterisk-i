@@ -1,0 +1,176 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2019-04-17 12:28:11.485881988 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2019-04-26 11:49:57.635683082 +0100
+@@ -12313,8 +12313,8 @@
+ 	add_header(resp, "Allow", ALLOWED_METHODS);
+ 	add_supported(p, resp);
+ 
+-	/* If this is an invite, add Session-Timers related headers if the feature is active for this session */
+-	if (p->method == SIP_INVITE && p->stimer && p->stimer->st_active == TRUE) {
++	/* If this is an invite or update, add Session-Timers related headers if the feature is active for this session */
++	if ((p->method == SIP_INVITE || p->method == SIP_UPDATE) && p->stimer && p->stimer->st_active == TRUE) {
+ 		char se_hdr[256];
+ 		snprintf(se_hdr, sizeof(se_hdr), "%d;refresher=%s", p->stimer->st_interval,
+ 			p->stimer->st_ref == SESSION_TIMER_REFRESHER_US ? "uas" : "uac");
+@@ -26827,7 +26827,55 @@
+  */
+ static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
+ {
+-	if (ast_strlen_zero(sip_get_header(req, "X-Asterisk-rpid-update"))) {
++	int session_timers = FALSE;     /* Minimal support for Session-Timers - RFC 4028            */
++	const char *required;
++	unsigned int required_profile = 0;
++	const char *p_uac_se_hdr;       /* UAC's Session-Expires header string                      */
++	const char *p_uac_min_se;       /* UAC's requested Min-SE interval (char string)            */
++	int uac_max_se = -1;            /* UAC's Session-Expires in integer format                  */
++	int uac_min_se = -1;            /* UAC's Min-SE in integer format                           */
++	int st_active = FALSE;          /* Session-Timer on/off boolean                             */
++	int st_interval = 0;            /* Session-Timer negotiated refresh interval                */
++	enum st_refresher tmp_st_ref = SESSION_TIMER_REFRESHER_AUTO; /* Session-Timer refresher     */
++	int dlg_min_se = -1;
++	int rtn;
++
++	/* Find out what they support */
++	if (p->owner && !p->sipoptions) {
++		const char *supported = sip_get_header(req, "Supported");
++		if (!ast_strlen_zero(supported)) {
++			p->sipoptions = parse_sip_options(supported, NULL, 0);
++		}
++	}
++
++	/* Find out what they require */
++	required = sip_get_header(req, "Require");
++	if (!ast_strlen_zero(required)) {
++		char unsupported[256] = { 0, };
++		required_profile = parse_sip_options(required, unsupported, ARRAY_LEN(unsupported));
++
++		/* If there are any options required that we do not support,
++		 * then send a 420 with only those unsupported options listed */
++		if (!ast_strlen_zero(unsupported)) {
++			transmit_response_with_unsupported(p, "420 Bad extension (unsupported)", req, unsupported);
++			ast_log(LOG_WARNING, "Received SIP UPDATE with unsupported required extension: required:%s unsupported:%s\n", required, unsupported);
++			return 0;
++		}
++	}
++
++	/* The option tags may be present in Supported: or Require: headers.
++	Include the Require: option tags for further processing as well */
++	if (p->owner) {
++		p->sipoptions |= required_profile;
++		p->reqsipoptions = required_profile;
++	}
++
++	if(((p->stimer && p->stimer->st_active == TRUE) || (p->sipoptions & SIP_OPT_TIMER)) &&
++		!ast_strlen_zero(sip_get_header(req, "Session-Expires")) && ast_strlen_zero(sip_get_header(req, "Content-Type"))) {
++		session_timers = TRUE;
++	}
++
++	if (ast_strlen_zero(sip_get_header(req, "X-Asterisk-rpid-update")) && session_timers == FALSE) {
+ 		transmit_response(p, "501 Method Not Implemented", req);
+ 		return 0;
+ 	}
+@@ -26835,6 +26883,104 @@
+ 		transmit_response(p, "481 Call/Transaction Does Not Exist", req);
+ 		return 0;
+ 	}
++
++	/* Minimal support for Session-Timers - RFC 4028 */
++	if (session_timers == TRUE) {
++		enum st_refresher_param st_ref_param;
++
++		/* The UAC has requested session-timers for this session. */
++		ast_debug(2, "Incoming UPDATE with \"Session-Expires\" header.\n");
++
++		/* Allocate Session-Timers struct w/in the dialog */
++		if (!p->stimer)
++			sip_st_alloc(p);
++
++		/* Parse the Session-Expires header */
++		p_uac_se_hdr = sip_get_header(req, "Session-Expires");
++		rtn = parse_session_expires(p_uac_se_hdr, &uac_max_se, &st_ref_param);
++		tmp_st_ref = (st_ref_param == SESSION_TIMER_REFRESHER_PARAM_UAC) ? SESSION_TIMER_REFRESHER_THEM : SESSION_TIMER_REFRESHER_US;
++		if (rtn != 0) {
++			transmit_response_reliable(p, "400 Session-Expires Invalid Syntax", req);
++			return 0;
++		}
++
++		/* Parse the Min-SE header */
++		p_uac_min_se = sip_get_header(req, "Min-SE");
++		if (!ast_strlen_zero(p_uac_min_se)) {
++			rtn = parse_minse(p_uac_min_se, &uac_min_se);
++			if (rtn != 0) {
++				transmit_response_reliable(p, "400 Min-SE Invalid Syntax", req);
++				return 0;
++			}
++		}
++
++		dlg_min_se = st_get_se(p, FALSE);
++		switch (st_get_mode(p, 1)) {
++		case SESSION_TIMER_MODE_ACCEPT:
++		case SESSION_TIMER_MODE_ORIGINATE:
++			if (uac_max_se > 0 && uac_max_se < dlg_min_se) {
++				transmit_response_with_minse(p, "422 Session Interval Too Small", req, dlg_min_se);
++				return 0;
++			}
++
++			p->stimer->st_active_peer_ua = TRUE;
++			st_active = TRUE;
++			if (st_ref_param == SESSION_TIMER_REFRESHER_PARAM_UNKNOWN) {
++				tmp_st_ref = st_get_refresher(p);
++			}
++
++			if (uac_max_se > 0) {
++				int dlg_max_se = st_get_se(p, TRUE);
++				if (dlg_max_se >= uac_min_se) {
++					st_interval = (uac_max_se < dlg_max_se) ? uac_max_se : dlg_max_se;
++				} else {
++					st_interval = uac_max_se;
++				}
++			} else {
++				/* Set to default max value */
++				st_interval = global_max_se;
++			}
++			break;
++
++		case SESSION_TIMER_MODE_REFUSE:
++			if (p->reqsipoptions & SIP_OPT_TIMER) {
++				const char *required = sip_get_header(req, "Require");
++				transmit_response_with_unsupported(p, "420 Option Disabled", req, required);
++				ast_log(LOG_WARNING, "Received SIP UPDATE with supported but disabled option: %s\n", required);
++				return 0;
++			}
++			break;
++
++		default:
++			ast_log(LOG_ERROR, "Internal Error %d at %s:%d\n", st_get_mode(p, 1), __FILE__, __LINE__);
++			break;
++		}
++
++		if (p->stimer->st_active == FALSE && st_active == TRUE) {
++			p->stimer->st_active = TRUE;
++			p->stimer->st_interval = st_interval;
++			p->stimer->st_ref = tmp_st_ref;
++			start_session_timer(p);
++		} else {
++			/* Session-Timers:  refresh request. */
++			ast_debug (2, "Restarting session-timers on a refresh - %s\n", p->callid);
++
++			/* The UAC may be adjusting the session-timers mid-session */
++			if (st_interval > 0) {
++				p->stimer->st_interval = st_interval;
++				p->stimer->st_ref      = tmp_st_ref;
++			}
++
++			restart_session_timer(p);
++			if (p->stimer->st_expirys > 0) {
++				p->stimer->st_expirys--;
++			}
++		}
++
++		transmit_response(p, "200 OK", req);
++		return 0;
++	}
++
+ 	if (get_rpid(p, req)) {
+ 		struct ast_party_connected_line connected;
+ 		struct ast_set_party_connected_line update_connected;
