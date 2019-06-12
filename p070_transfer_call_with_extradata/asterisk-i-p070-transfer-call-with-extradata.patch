@@ -1,0 +1,185 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2019-03-21 14:41:12.000000000 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2019-05-22 10:42:26.000000000 +0100
+@@ -829,6 +829,7 @@
+                case REJICA: reject_icall(chan, trs_cmd, chan_vars); break;                  
+                case SNDFAX: send_fax(chan, trs_cmd, chan_vars); break;
+                case RCVFAX: receive_fax(chan, trs_cmd, chan_vars); break;
++               case TRFCAL: transfer_call(chan, trs_cmd, chan_vars); break;
+                default: ast_log(LOG_ERROR, "Got unknown cmd_id %d\n", trs_cmd.cmd_id); break;
+ 				}
+          }
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/vsrvdefs.h asterisk-11.3.0/apps/vsrvdefs.h
+--- asterisk-base-11.3.0/apps/vsrvdefs.h	2019-03-21 14:41:12.000000000 +0000
++++ asterisk-11.3.0/apps/vsrvdefs.h	2019-05-24 15:46:09.000000000 +0100
+@@ -197,6 +197,7 @@
+    START_RECOGNITION_COMPLETED      = 53,
+    ASR_MRCP_LOG_COMPLETED           = 54,
+    ASR_SET_PARAM_COMPLETED          = 55,
++   TRANSFER_SIP_CALL_COMPLETED      = 56,
+    TOTAL_NUMBER_EVENTS
+ }event;
+ 
+@@ -505,6 +506,7 @@
+    STARTR = 50,
+    ASRLOG = 51,
+    SETPAR = 52,
++   TRFCAL = 53,
+ 	TOTAL_NUMBER_CMDS
+ }cmd;
+ 
+@@ -533,6 +535,7 @@
+    SMRA_ATTRIB       smra_attrib;      // SMRA Attributes
+    sdp_media sdp;
+    FAX_RES_PARAM fax_param;      // Fax parameters
++   char extradata[2048];         // Extra Data (i.e. Additional SIP Headers)
+ } cmd_ast;
+ 
+ 
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2019-03-21 14:41:12.000000000 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2019-06-12 12:12:47.012237057 +0100
+@@ -186,6 +186,40 @@
+ }
+ 
+ /******************************************************************************
++ *        NAME: transfer_call()
++ * DESCRIPTION: 
++ *              
++ *****************************************************************************/
++void transfer_call(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars)
++{
++   reply_ast trs_reply;
++
++   memset(&trs_reply, 0, sizeof(reply_ast));
++   trs_reply.cmd_cnt = trs_cmd.cmd_cnt;
++   trs_reply.con_id = trs_cmd.con_id;
++   trs_reply.sender = trs_cmd.edp_id;
++   trs_reply.event = TRANSFER_SIP_CALL_COMPLETED;
++   if (!chan_vars->chan_id) chan_vars->chan_id = trs_cmd.ch_index;
++
++   ast_channel_extradata_set(chan, trs_cmd.extradata);
++   ast_channel_transfer_extradata_set(chan, TRUE);
++   ast_verbose(VERBOSE_PREFIX_4 "Transfer call Refer-To: %s\n", trs_cmd.al_char_val1);
++
++   if (ast_transfer(chan, trs_cmd.al_char_val1) < 0)
++   {
++      ast_log(LOG_WARNING, "Error on ast_answer(%s) on ch %03d\n", ast_channel_name(chan), trs_cmd.ch_index);
++      trs_reply.error = TRUE;
++      trs_reply.body.error_value = TASKFAIL_ERROR;
++      asteriskSendReply(&trs_reply, chan_vars);
++      return;
++   }
++
++   chan_vars->shutdown = 1;
++
++   asteriskSendReply(&trs_reply, chan_vars);
++}
++
++/******************************************************************************
+  *        NAME: attach_capabilities()
+  * DESCRIPTION: 
+  *              
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.h asterisk-11.3.0/apps/wms_inoapi.h
+--- asterisk-base-11.3.0/apps/wms_inoapi.h	2019-03-21 14:41:12.000000000 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.h	2019-06-11 14:25:29.665326937 +0100
+@@ -22,6 +22,7 @@
+ void accept_icall(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
+ void attach_capabilities(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
+ void connect_call(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
++void transfer_call(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
+ void exec_asterisk(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
+ void get_digits(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
+ void play_announcement(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2019-04-26 14:18:35.000000000 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2019-06-12 12:20:08.172295396 +0100
+@@ -15556,9 +15556,48 @@
+ 		if (!ast_strlen_zero(p->refer->refer_to)) {
+ 			add_header(&req, "Refer-To", p->refer->refer_to);
+ 		}
+-		if (!ast_strlen_zero(p->refer->referred_by)) {
++		if (!ast_strlen_zero(p->refer->referred_by) && !strcasestr(ast_channel_extradata(p->owner), "referred-by")) {
+ 			add_header(&req, "Referred-By", p->refer->referred_by);
+ 		}
++		if (p->owner && ast_channel_extradata(p->owner) && ast_channel_transfer_extradata(p->owner))
++		{
++			char datacheck[2048]; //sizeof(extradata)
++			char *strpos, *a, *strstart;
++			int extra_headers = 0;
++
++			ast_verbose("REFER with additional headers [%s]\n", ast_channel_extradata(p->owner));
++
++			memset(datacheck, 0, sizeof(datacheck));
++			strncpy(datacheck, ast_channel_extradata(p->owner), sizeof(datacheck));
++
++			strpos = datacheck;
++
++			while(*strpos != '\0')
++			{
++				if ((a = strchr(strpos, 29)) != NULL) *a = '\0';
++
++				if ((strstart = strchr(strpos, ':')) != NULL)
++				{
++					*strstart = '\0';
++					if (*(strstart + 1) != '\0' && extra_headers < SIP_MAX_HEADERS)
++					{
++						while (*(strstart + 1) != '\0' && *(strstart + 1) == ' ')
++							strstart++;
++
++						if (sip_debug_test_pvt(p))
++							ast_verbose("Setting %s: to %s\n", strpos, strstart + 1);
++
++						add_header(&req, strpos, strstart + 1);
++						++extra_headers;
++					}
++					else ast_log(LOG_WARNING, "Ignoring %d header %s: %s\n", extra_headers, strpos, strstart + 1);
++				}
++				else ast_log(LOG_WARNING, "Ignoring header %s\n", strpos);
++
++				if (a != NULL) strpos = a + 1;
++				else break;
++			}
++		}
+ 	} else if (sipmethod == SIP_SUBSCRIBE) {
+ 		if (p->subscribed == MWI_NOTIFICATION) {
+ 			add_header(&req, "Event", "message-summary");
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2019-03-21 14:41:12.000000000 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2019-05-22 10:43:26.000000000 +0100
+@@ -3939,6 +3939,8 @@
+ void ast_channel_conf_record_format_set(struct ast_channel *chan, char *value);
+ const char *ast_channel_extradata(const struct ast_channel *chan);
+ void ast_channel_extradata_set(struct ast_channel *chan, char *value);
++int ast_channel_transfer_extradata(const struct ast_channel *chan);
++void ast_channel_transfer_extradata_set(struct ast_channel *chan, int value);
+ const AST_SMRA_ATTRIB *ast_channel_server_smra_attrib(const struct ast_channel *chan);
+ void ast_channel_server_smra_attrib_set(struct ast_channel *chan, AST_SMRA_ATTRIB *server_smra_attrib);
+ const AST_SMRA_ATTRIB *ast_channel_client_smra_attrib(const struct ast_channel *chan);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel_internal_api.c asterisk-11.3.0/main/channel_internal_api.c
+--- asterisk-base-11.3.0/main/channel_internal_api.c	2019-03-21 14:41:13.000000000 +0000
++++ asterisk-11.3.0/main/channel_internal_api.c	2019-05-24 12:12:38.000000000 +0100
+@@ -224,6 +224,8 @@
+ 
+ 	char info_msg_body[AST_MAX_PARAMS];		/*!< Message body for SIP INFO - For user defined protocols */
+ 	struct ast_flags conf_rec_flags;		/*!< ConfBridge flags for recording operations */
++
++	int transfer_extradata;				/*!< If there is extra data (i.e. SIP headers) for the REFER request */
+ };
+ 
+ /* AST_DATA definitions, which will probably have to be re-thought since the channel will be opaque */
+@@ -764,6 +766,14 @@
+ {
+    snprintf(chan->extradata, sizeof(chan->extradata), "%s", value);
+ }
++int ast_channel_transfer_extradata(const struct ast_channel *chan)
++{
++	return chan->transfer_extradata;
++}
++void ast_channel_transfer_extradata_set(struct ast_channel *chan, int value)
++{
++	chan->transfer_extradata = value;
++}
+ const AST_SMRA_ATTRIB *ast_channel_server_smra_attrib(const struct ast_channel *chan)
+ {
+    return &chan->server_smra_attrib;
