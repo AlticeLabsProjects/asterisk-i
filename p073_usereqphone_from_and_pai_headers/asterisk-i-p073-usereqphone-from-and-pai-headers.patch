@@ -1,0 +1,55 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2020-11-19 17:00:42.105747895 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2020-11-20 12:02:34.287810555 +0000
+@@ -15089,39 +15089,40 @@
+ 	   {
+ 	      // if (ourport != STANDARD_SIP_PORT) then WMS must comply with that!
+ 	      // Build From:
+-	      snprintf(from, sizeof(from), "%s;tag=%s", ast_channel_cid_ani(p->owner), p->tag);
++	      snprintf(from, sizeof(from), "%s%s;tag=%s", ast_channel_cid_ani(p->owner), urioptions, p->tag);
+ 	      // Build P-Asserted-Identity
+-	      snprintf(asserted_id, sizeof(asserted_id), "%s", ast_channel_cid_ani(p->owner));
++	      snprintf(asserted_id, sizeof(asserted_id), "%s%s", ast_channel_cid_ani(p->owner), urioptions);
+ 	   }
+ 	   else if (strchr(ast_channel_cid_ani(p->owner), '@'))
+ 	   {
+ 	      if (!sip_standard_port(p->socket.type, ourport))
+ 	      {
+ 	         // Build From:
+-	         snprintf(from, sizeof(from), "<sip:%s:%d>;tag=%s", ast_channel_cid_ani(p->owner), ourport, p->tag);
++	         snprintf(from, sizeof(from), "<sip:%s:%d%s>;tag=%s", ast_channel_cid_ani(p->owner), ourport,
++	               urioptions, p->tag);
+ 	         // Build P-Asserted-Identity
+-	         snprintf(asserted_id, sizeof(asserted_id), "<sip:%s:%d>",
+-	               ast_channel_cid_ani(p->owner), ourport);
++	         snprintf(asserted_id, sizeof(asserted_id), "<sip:%s:%d%s>",
++	               ast_channel_cid_ani(p->owner), ourport, urioptions);
+ 	      }
+ 	      else
+ 	      {
+ 	         // Build From:
+-	         snprintf(from, sizeof(from), "<sip:%s>;tag=%s", ast_channel_cid_ani(p->owner), p->tag);
++	         snprintf(from, sizeof(from), "<sip:%s%s>;tag=%s", ast_channel_cid_ani(p->owner), urioptions, p->tag);
+ 	         // Build P-Asserted-Identity
+-	         snprintf(asserted_id, sizeof(asserted_id), "<sip:%s>", ast_channel_cid_ani(p->owner));
++	         snprintf(asserted_id, sizeof(asserted_id), "<sip:%s%s>", ast_channel_cid_ani(p->owner), urioptions);
+ 	      }
+ 	   }
+ 	   else
+ 	   {
+ 	      if (!sip_standard_port(p->socket.type, ourport) && ast_strlen_zero(p->fromdomain))
+ 	      {
+-	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, d, ourport, p->tag);
+-	         snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s:%d>", n, l, d, ourport);
++	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d%s>;tag=%s", n, l, d, ourport, urioptions, p->tag);
++	         snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s:%d%s>", n, l, d, ourport, urioptions);
+ 	      }
+ 	      else
+ 	      {
+-	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, d, p->tag);
+-	         snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s>", n, l, d);
++	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s%s>;tag=%s", n, l, d, urioptions, p->tag);
++	         snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s%s>", n, l, d, urioptions);
+ 	      }
+ 	   }
+ 	   if (sip_debug_test_pvt(p))
