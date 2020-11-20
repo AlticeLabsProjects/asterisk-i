@@ -1,0 +1,32 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2020-06-23 06:07:24.086001740 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2020-06-23 06:15:19.234001739 +0100
+@@ -4610,21 +4610,17 @@
+ 	} else if (p->refer && !p->alreadygone) {
+ 		ast_debug(3, "Finally hanging up channel after transfer: %s\n", p->callid);
+ 		stop_media_flows(p);
+-		transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
+-		append_history(p, "ReferBYE", "Sending BYE on transferer call leg %s", p->callid);
+-		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+-	} else {
+-		append_history(p, "AutoDestroy", "%s", p->callid);
+-		ast_debug(3, "Auto destroying SIP dialog '%s'\n", p->callid);
+-		sip_pvt_unlock(p);
+-		dialog_unlink_all(p); /* once it's unlinked and unrefd everywhere, it'll be freed automagically */
+-		sip_pvt_lock(p);
++	}
++	append_history(p, "AutoDestroy", "%s", p->callid);
++	ast_debug(3, "Auto destroying SIP dialog '%s'\n", p->callid);
++	sip_pvt_unlock(p);
++	dialog_unlink_all(p); /* once it's unlinked and unrefd everywhere, it'll be freed automagically */
++	//sip_pvt_lock(p);
+ 		/* dialog_unref(p, "unref dialog-- no other matching conditions"); -- unlink all now should finish off the dialog's references and free it. */
+ 		/* sip_destroy(p); */		/* Go ahead and destroy dialog. All attempts to recover is done */
+ 		/* sip_destroy also absorbs the reference */
+-	}
+ 
+-	sip_pvt_unlock(p);
++	//sip_pvt_unlock(p);
+ 
+ 	dialog_unref(p, "The ref to a dialog passed to this sched callback is going out of scope; unref it.");
+ 
