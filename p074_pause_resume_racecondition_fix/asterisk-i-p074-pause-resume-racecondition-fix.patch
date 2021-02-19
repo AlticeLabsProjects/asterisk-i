@@ -1,0 +1,144 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_confbridge.c asterisk-11.3.0/apps/app_confbridge.c
+--- asterisk-base-11.3.0/apps/app_confbridge.c	2020-12-22 19:21:43.170012642 +0000
++++ asterisk-11.3.0/apps/app_confbridge.c	2021-01-08 17:23:54.033188581 +0000
+@@ -629,7 +629,9 @@
+ 	if (conference_bridge->record_thread == AST_PTHREADT_NULL || !conf_is_recording(conference_bridge)) {
+ 		return -1;
+ 	}
++        ast_channel_lock(conference_bridge->record_chan);
+ 	ast_set_flag(ast_channel_conf_rec_flags(conference_bridge->record_chan), CONF_REC_PAUSED);
++        ast_channel_unlock(conference_bridge->record_chan);
+ 	ast_test_suite_event_notify("CONF_PAUSE_RECORD", "Message: paused conference recording channel\r\nConference: %s", conference_bridge->b_profile.name);
+ 
+ 	return 0;
+@@ -646,7 +648,9 @@
+ 	if (conference_bridge->record_thread == AST_PTHREADT_NULL || !conf_is_recording(conference_bridge)) {
+ 		return -1;
+ 	}
++        ast_channel_lock(conference_bridge->record_chan);
+ 	ast_clear_flag(ast_channel_conf_rec_flags(conference_bridge->record_chan), CONF_REC_PAUSED);
++        ast_channel_unlock(conference_bridge->record_chan);
+ 	ast_test_suite_event_notify("CONF_RESUME_RECORD", "Message: resumed conference recording channel\r\nConference: %s", conference_bridge->b_profile.name);
+ 
+ 	return 0;
+@@ -3000,7 +3004,9 @@
+ 	if (conf_is_recording(bridge)) {
+ 		ao2_unlock(bridge);
+ 		ao2_ref(bridge, -1);
++                ast_channel_lock(bridge->record_chan);
+ 		ast_set_flag(ast_channel_conf_rec_flags(bridge->record_chan), CONF_REC_PAUSED);
++                ast_channel_unlock(bridge->record_chan);
+ 		astman_send_ack(s, m, "Conference Recording Paused.");
+ 		return 0;
+ 	}
+@@ -3035,7 +3041,9 @@
+ 	if (conf_is_recording(bridge)) {
+ 		ao2_unlock(bridge);
+ 		ao2_ref(bridge, -1);
++                ast_channel_lock(bridge->record_chan);
+ 		ast_clear_flag(ast_channel_conf_rec_flags(bridge->record_chan), CONF_REC_PAUSED);
++                ast_channel_unlock(bridge->record_chan);
+ 		astman_send_ack(s, m, "Conference Recording Resumed.");
+ 		return 0;
+ 	}
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/app_mixmonitor.c asterisk-11.3.0/apps/app_mixmonitor.c
+--- asterisk-base-11.3.0/apps/app_mixmonitor.c	2020-12-22 19:21:43.170012642 +0000
++++ asterisk-11.3.0/apps/app_mixmonitor.c	2020-12-23 12:10:52.071006747 +0000
+@@ -648,7 +648,9 @@
+ 		ast_audiohook_unlock(&mixmonitor->audiohook);
+ 
+ 		if (!ast_test_flag(mixmonitor, MUXFLAG_BRIDGED) || (mixmonitor->autochan->chan && ast_bridged_channel(mixmonitor->autochan->chan))) {
++                        ast_channel_lock(mixmonitor->autochan->chan);
+ 			paused = ast_test_flag(ast_channel_conf_rec_flags(mixmonitor->autochan->chan), CONF_REC_PAUSED);
++                        ast_channel_unlock(mixmonitor->autochan->chan);
+ 			ast_mutex_lock(&mixmonitor->mixmonitor_ds->lock);
+ 
+ 			/* If the recording was paused, just touch the file */
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2020-12-22 19:21:43.172012692 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2021-01-08 17:23:51.511122820 +0000
+@@ -625,7 +625,7 @@
+                   ast_channel_conf_record_format_set(chan, end + 1);
+                   *end = '\0';
+                   ast_channel_conf_record_set(chan, temp_record);
+-                  ast_set_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE);
++                  //ast_set_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE);
+ 
+                   break;
+ 
+@@ -787,6 +787,7 @@
+ 
+          if (!strcasecmp(trs_cmd.al_char_val1, "pause"))
+          {
++            ast_channel_lock(chan);
+             if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_ACTIVE))
+             {
+                if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSED))
+@@ -802,12 +803,15 @@
+             else
+             {
+                ast_log(LOG_NOTICE, "Record pause issued on non-recording conference %d on ch %s\n", chan_vars->conference.id, ast_channel_name(chan));
++               ast_channel_unlock(chan);
+                goto error;
+             }
++            ast_channel_unlock(chan);
+          }
+          else if (!strcasecmp(trs_cmd.al_char_val1, "resume"))
+          {
+-            if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSED))
++            ast_channel_lock(chan);
++            if (ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSED) || ast_test_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSE))
+             {
+                ast_set_flag(ast_channel_conf_rec_flags(chan), CONF_REC_RESUME);
+                ast_clear_flag(ast_channel_conf_rec_flags(chan), CONF_REC_PAUSE);
+@@ -821,9 +825,11 @@
+                else
+                {
+                   ast_log(LOG_NOTICE, "Record resume issued on non-recording conference %d on ch %s\n", chan_vars->conference.id, ast_channel_name(chan));
++                  ast_channel_unlock(chan);
+                   goto error;
+                }
+             }
++            ast_channel_unlock(chan);
+          }
+         
+          asteriskSendReply(&trs_reply, chan_vars);
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
+--- asterisk-base-11.3.0/main/bridging.c	2020-12-22 19:21:42.974007734 +0000
++++ asterisk-11.3.0/main/bridging.c	2021-01-08 17:23:52.803155150 +0000
+@@ -1183,6 +1183,7 @@
+       }
+ 
+       // Conf recording operations (pause/resume) specific flags
++      ast_channel_lock(bridge_channel->chan);
+       if(ast_test_flag(ast_channel_conf_rec_flags(bridge_channel->chan), CONF_REC_PAUSE))
+       {
+          ast_debug(1, "WMS is talking to me on bridge %p and chan %s and says: pause rec\n",
+@@ -1192,7 +1193,10 @@
+          struct ast_bridge_channel *bc = NULL;
+          AST_LIST_TRAVERSE(&bridge_channel->bridge->channels, bc, entry) {
+                  if (bc->chan) {
++                        if(bc->chan != bridge_channel->chan)
++                              ast_channel_lock(bc->chan);
+                         ast_set_flag(ast_channel_conf_rec_flags(bc->chan), CONF_REC_PAUSED);
++                        ast_channel_unlock(bc->chan);
+                  }
+          }
+ 
+@@ -1208,12 +1212,16 @@
+          struct ast_bridge_channel *bc = NULL;
+          AST_LIST_TRAVERSE(&bridge_channel->bridge->channels, bc, entry) {
+                  if (bc->chan) {
++                        if(bc->chan != bridge_channel->chan)
++                              ast_channel_lock(bc->chan);
+                         ast_clear_flag(ast_channel_conf_rec_flags(bc->chan), CONF_REC_PAUSED);
++                        ast_channel_unlock(bc->chan);
+                  }
+          }
+ 
+          ast_clear_flag(ast_channel_conf_rec_flags(bridge_channel->chan), CONF_REC_RESUME);
+       }
++      ast_channel_unlock(bridge_channel->chan);
+ 
+       // Play announcement to conference
+       if (ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_DO_PLAY))
