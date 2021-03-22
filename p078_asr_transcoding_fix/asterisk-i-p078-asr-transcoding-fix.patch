@@ -1,0 +1,54 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2021-03-22 11:53:39.607094436 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2021-03-22 12:00:11.938861780 +0000
+@@ -225,17 +225,18 @@
+ 			//ast_format_set(&rtp_ulaw, AST_FORMAT_ULAW, 0);
+ 			ast_format_set(&rtp_alaw, AST_FORMAT_ALAW, 0);
+ 
+-			//if ((!ast_format_cap_iscompatible(ast_channel_nativeformats(chan), &rtp_ulaw)) && ((!ast_format_cap_iscompatible(ast_channel_nativeformats(chan), &rtp_alaw))))
+-			if (!ast_format_cap_iscompatible(ast_channel_nativeformats(chan), &rtp_alaw))
+-			{
+-			   asr_cap = ast_format_cap_alloc();
+-			   ast_format_cap_add(asr_cap, &rtp_alaw);
+-			   //ast_format_cap_add(asr_cap, &rtp_ulaw);
+-
+-				res = ast_translator_best_choice(asr_cap, ast_channel_nativeformats(chan), &rtp_alaw, &src);
+-				if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
+-				chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_alaw, &src);
+-			}
++			if (ast_format_cmp(ast_channel_writeformat(chan), &rtp_alaw) == AST_FORMAT_CMP_NOT_EQUAL){
++				 if (!ast_format_cap_iscompatible(ast_channel_nativeformats(chan), &rtp_alaw))
++				 {
++					 asr_cap = ast_format_cap_alloc();
++					 ast_format_cap_add(asr_cap, &rtp_alaw);
++					 //ast_format_cap_add(asr_cap, &rtp_ulaw);
++
++					 res = ast_translator_best_choice(asr_cap, ast_channel_nativeformats(chan), &rtp_alaw, &src);
++					 if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
++					 chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_alaw, &src);
++				 }
++			 }
+ 		}
+ 	}
+ }
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2021-03-22 11:53:39.645095385 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2021-03-22 12:03:13.944287972 +0000
+@@ -19052,17 +19052,13 @@
+       for(i = 0; i < global_number_ic_headers; i++)
+       {
+          start=0;
+-         ast_log(LOG_WARNING, "START GET HEADERS!\n");
+          do
+          {
+             aux=__get_header(req, global_ic_headers[i], &start);
+-            ast_log(LOG_WARNING, "IDX: %d, HEADER: %s: %s\n", start, global_ic_headers[i], aux);
+             snprintf(buffer, sizeof(buffer), "%s", aux);
+-            ast_log(LOG_WARNING, "Buffer: %s\n", buffer);
+ 
+             if(buffer[0] != '\0')
+             {
+-            ast_log(LOG_WARNING, "Inside\n");
+                if (strlen(p->ic_extra_data) + strlen(buffer) < sizeof(p->ic_extra_data))
+                {
+                   if (p->ic_extra_data[0] == '\0') sprintf(p->ic_extra_data, "%s: %s", global_ic_headers[i], buffer);
