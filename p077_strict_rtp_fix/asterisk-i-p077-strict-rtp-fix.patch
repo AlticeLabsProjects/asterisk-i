@@ -1,0 +1,139 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_rtp_asterisk.c asterisk-11.3.0/res/res_rtp_asterisk.c
+--- asterisk-base-11.3.0/res/res_rtp_asterisk.c	2021-02-24 09:35:31.036154664 +0000
++++ asterisk-11.3.0/res/res_rtp_asterisk.c	2021-03-05 20:02:53.519034558 +0000
+@@ -110,6 +110,7 @@
+ 	STRICT_RTP_OPEN = 0, /*! No RTP packets should be dropped, all sources accepted */
+ 	STRICT_RTP_LEARN,    /*! Accept next packet as source */
+ 	STRICT_RTP_CLOSED,   /*! Drop all RTP packets not coming from source that was learned */
++	STRICT_RTP_CLOSED_FOREVER,   /*! Drop all RTP packets not coming from source that was learned */
+ };
+ 
+ #define DEFAULT_STRICT_RTP STRICT_RTP_CLOSED
+@@ -551,6 +552,7 @@
+ 		pj_ice_sess_start_check(rtp->ice);
+ 		pj_timer_heap_poll(timerheap, NULL);
+ 		rtp->ice_started = 1;
++		rtp->strict_rtp_state = STRICT_RTP_OPEN;								  
+ 	}
+ }
+ 
+@@ -1034,6 +1036,19 @@
+ #endif
+ };
+ 
++static void rtp_learning_seq_init(struct rtp_learning_info *info, uint16_t seq);
++
++static void ast_rtp_on_ice_complete(pj_ice_sess *ice, pj_status_t status)
++{
++	struct ast_rtp *rtp = ice->user_data;
++
++	if (!strictrtp) {
++		return;
++	}
++
++	rtp->strict_rtp_state = STRICT_RTP_LEARN;
++	rtp_learning_seq_init(&rtp->rtp_source_learn, (uint16_t)rtp->seqno);
++}
+ static void ast_rtp_on_ice_rx_data(pj_ice_sess *ice, unsigned comp_id, unsigned transport_id, void *pkt, pj_size_t size, const pj_sockaddr_t *src_addr, unsigned src_addr_len)
+ {
+ 	struct ast_rtp *rtp = ice->user_data;
+@@ -1080,6 +1095,7 @@
+ 
+ /* ICE Session interface declaration */
+ static pj_ice_sess_cb ast_rtp_ice_sess_cb = {
++	.on_ice_complete = ast_rtp_on_ice_complete,										
+ 	.on_rx_data = ast_rtp_on_ice_rx_data,
+ 	.on_tx_pkt = ast_rtp_on_ice_tx_pkt,
+ };
+@@ -1468,7 +1484,7 @@
+ 		rtp->passthrough = 0;
+ 	}
+ 
+-	if ((*in & 0xC0) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
++	if ((*in > 1) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
+ 	   return -1;
+ 	}
+ 
+@@ -1590,7 +1606,7 @@
+  * \brief Initializes sequence values and probation for learning mode.
+  * \note This is an adaptation of pjmedia's pjmedia_rtp_seq_init function.
+  *
+- * \param rtp pointer to rtp struct used with the received rtp packet.
++ * \param info The learning information to track
+  * \param seq sequence number read from the rtp header to initialize the information with
+  */
+ static void rtp_learning_seq_init(struct rtp_learning_info *info, uint16_t seq)
+@@ -1604,7 +1620,7 @@
+  * \brief Updates sequence information for learning mode and determines if probation/learning mode should remain in effect.
+  * \note This function was adapted from pjmedia's pjmedia_rtp_seq_update function.
+  *
+- * \param rtp pointer to rtp struct used with the received rtp packet.
++ * \param info Structure tracking the learning progress of some address
+  * \param seq sequence number read from the rtp header
+  * \retval 0 if probation mode should exit for this address
+  * \retval non-zero if probation mode should continue
+@@ -1615,6 +1631,7 @@
+ 		/* packet is in sequence */
+ 		info->packets--;
+ 	} else {
++		/* Sequence discontinuity; reset */							 
+ 		info->packets = learning_min_sequential - 1;
+ 	}
+ 	info->max_seq = seq;
+@@ -3549,34 +3566,40 @@
+ 
+ 		/* Send the rtp and the seqno from header to rtp_learning_rtp_seq_update to see whether we can exit or not*/
+ 		if (rtp_learning_rtp_seq_update(&rtp->rtp_source_learn, seqno)) {
+-			ast_debug(1, "%p -- Probation at seq %d with %d to go; discarding frame\n", rtp, rtp->rtp_source_learn.max_seq, rtp->rtp_source_learn.packets);
+-		        
++			ast_debug(1, "%p -- Probation at seq %d with %d to go; discarding frame\n", 
++				rtp, rtp->rtp_source_learn.max_seq, rtp->rtp_source_learn.packets);
+ 			return &ast_null_frame;
+ 		}
+ 
+ 		ast_verb(4, "%p -- Probation passed - setting RTP source address to %s\n", rtp, ast_sockaddr_stringify(&addr));
+ 		rtp->strict_rtp_state = STRICT_RTP_CLOSED;
+ 	} 
+-	if (rtp->strict_rtp_state == STRICT_RTP_CLOSED) {
+-		if (ast_sockaddr_cmp(&rtp->strict_rtp_address, &addr)) {
++	if (rtp->strict_rtp_state == STRICT_RTP_CLOSED || rtp->strict_rtp_state == STRICT_RTP_CLOSED_FOREVER) {
++		if (!ast_sockaddr_cmp(&rtp->strict_rtp_address, &addr)) {
+ 			/* Always reset the alternate learning source */
+ 	 		rtp_learning_seq_init(&rtp->alt_source_learn, seqno);
+ 		} else {
+-			/* Hmm, not the strict addres. Perhaps we're getting audio from the alternate? */
++			/* Hmm, not the strict address. Perhaps we're getting audio from the alternate? */
+ 			if (!ast_sockaddr_cmp(&rtp->alt_rtp_address, &addr)) {
+ 				/* ooh, we did! You're now the new expected address, son! */
+ 				ast_sockaddr_copy(&rtp->strict_rtp_address, &addr);
+ 			} else  {
++				if(rtp->strict_rtp_state==STRICT_RTP_CLOSED_FOREVER) {
++					ast_debug(1, "%p -- Received RTP packet from %s, dropping due to strict RTP protection", rtp, ast_sockaddr_stringify(&addr));
++					return &ast_null_frame;
++				}
+ 				/* Start trying to learn from the new address. If we pass a probationary period with
+ 				 * it, that means we've stopped getting RTP from the original source and we should
+ 				 * switch to it
+ 				 */
+ 				if (rtp_learning_rtp_seq_update(&rtp->alt_source_learn, seqno)) {
+-					ast_debug(1, "%p -- Received RTP packet from %s, dropping due to strict RTP protection. Will switch to it in %d packets\n", rtp, ast_sockaddr_stringify(&addr), rtp->alt_source_learn.packets);
++					ast_debug(1, "%p -- Received RTP packet from %s, dropping due to strict RTP protection. Will switch to it in %d packets\n",
++							rtp, ast_sockaddr_stringify(&addr), rtp->alt_source_learn.packets);
+ 					return &ast_null_frame;
+ 				}
+-				//ast_verb(4, "%p -- Switching RTP source address to %s\n", rtp, ast_sockaddr_stringify(&addr));
++				ast_verb(4, "%p -- Switching RTP source address to %s\n", rtp, ast_sockaddr_stringify(&addr));
+ 				ast_sockaddr_copy(&rtp->strict_rtp_address, &addr);
++				rtp->strict_rtp_state=STRICT_RTP_CLOSED_FOREVER;
+ 			}
+ 		}
+ 	}
+@@ -3954,7 +3977,7 @@
+ 
+ 	rtp->rxseqno = 0;
+ 
+-	if (strictrtp) {
++	if (strictrtp && rtp->strict_rtp_state != STRICT_RTP_OPEN) {
+ 		rtp->strict_rtp_state = STRICT_RTP_LEARN;
+ 		rtp_learning_seq_init(&rtp->rtp_source_learn, rtp->seqno);
+ 	}
