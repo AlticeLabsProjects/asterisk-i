@@ -1,0 +1,44 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/res/res_rtp_asterisk.c asterisk-11.3.0/res/res_rtp_asterisk.c
+--- asterisk-base-11.3.0/res/res_rtp_asterisk.c	2021-06-22 17:00:18.762708644 +0100
++++ asterisk-11.3.0/res/res_rtp_asterisk.c	2021-06-23 00:08:05.253607398 +0100
+@@ -3493,6 +3493,7 @@
+ 	struct ast_rtp_payload_type payload;
+ 	struct ast_sockaddr remote_address = { {0,} };
+ 	struct frame_list frames;
++        struct timeval now;
+ 
+ 	/* If this is actually RTCP let's hop on over and handle it */
+ 	if (rtcp) {
+@@ -3585,8 +3586,17 @@
+ 				ast_sockaddr_copy(&rtp->strict_rtp_address, &addr);
+ 			} else  {
+ 				if(rtp->strict_rtp_state==STRICT_RTP_CLOSED_FOREVER) {
+-					ast_debug(1, "%p -- Received RTP packet from %s, dropping due to strict RTP protection", rtp, ast_sockaddr_stringify(&addr));
+-					return &ast_null_frame;
++                                        now  = ast_tvnow();
++                                        long rtp_lastrx_elapsed_seconds = (now.tv_sec - rtp->lastrx.tv_sec);
++                                        long rtp_lastrx_elapsed_useconds = (now.tv_usec - rtp->lastrx.tv_usec);
++                                        long rtp_lastrx_elapsed_mills = ((rtp_lastrx_elapsed_seconds) * 1000 + rtp_lastrx_elapsed_useconds/1000.0);
++                                        // ALB - The value 75 was decided after capture analysis. fvieira proposed 100 and virgilio-cunha proposed 50.
++					if (rtp_lastrx_elapsed_mills > 75) {
++                                                ast_verb(4, "%p -- Active RTP STREAM does not receive packages for %ld milliseconds, Lets switch to alternative stream \n", rtp, rtp_lastrx_elapsed_mills);
++                                        } else {
++                                                 ast_debug(1, "%p -- Received RTP packet from %s, dropping due to strict RTP protection", rtp, ast_sockaddr_stringify(&addr));
++					         return &ast_null_frame;
++                                               }
+ 				}
+ 				/* Start trying to learn from the new address. If we pass a probationary period with
+ 				 * it, that means we've stopped getting RTP from the original source and we should
+@@ -3780,8 +3790,10 @@
+ 	}
+ 
+ 	rtp->lastrxts = timestamp;
+-
+-	rtp->f.src = "RTP";
++        
++        rtp->lastrx = ast_tvnow();
++	
++        rtp->f.src = "RTP";
+ 	rtp->f.mallocd = 0;
+ 	rtp->f.datalen = res - hdrlen;
+ 	rtp->f.data.ptr = rtp->rawdata + hdrlen + AST_FRIENDLY_OFFSET;
