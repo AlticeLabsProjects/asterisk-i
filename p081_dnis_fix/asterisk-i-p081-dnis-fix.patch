@@ -1,0 +1,35 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2021-10-15 14:52:09.996739311 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2021-10-15 14:51:41.187000579 +0100
+@@ -8431,13 +8431,19 @@
+ 	   const char *request_uri = REQ_OFFSET_TO_STR(&i->initreq, rlpart2);
+ 	   if (!ast_strlen_zero(request_uri))
+ 	   {
+-	      if (strncmp(request_uri, "sip:", 4) == 0 || strncmp(request_uri, "tel:", 4) == 0)
++	      if (strncmp(request_uri, "sip:", 4) == 0 || strncmp(request_uri, "tel:", 4) == 0){
+ 	         ast_channel_cid_uri_set(tmp, request_uri + 4);
+-	      else if (strncmp(request_uri, "sips:", 5) == 0)
++	         ast_channel_cid_dnis_set(tmp, request_uri + 4);
++	      }else if (strncmp(request_uri, "sips:", 5) == 0){
+ 	         ast_channel_cid_uri_set(tmp, request_uri + 5);
+-	      else ast_channel_cid_uri_set(tmp, request_uri);
++	         ast_channel_cid_dnis_set(tmp, request_uri + 5);
++	      }else{
++	         ast_channel_cid_uri_set(tmp, request_uri);
++	         ast_channel_cid_dnis_set(tmp, request_uri);
++	      }
+ 	   }
+ 	}
++	/* DNIS must be equal to RURI
+ 	//To
+ 	if (!ast_strlen_zero(i->to))
+ 	{
+@@ -8447,7 +8453,7 @@
+ 	      ast_channel_cid_dnis_set(tmp, i->to + 5);
+ 	   else ast_channel_cid_dnis_set(tmp, i->to);
+ 	}
+-
++	*/
+ 	ast_channel_cid_callid_set(tmp, i->callid);
+ 	ast_channel_jointcapability_set(tmp, i->jointcaps);
+ 	ast_channel_defhangcause_set(tmp, global_defhangcause);
