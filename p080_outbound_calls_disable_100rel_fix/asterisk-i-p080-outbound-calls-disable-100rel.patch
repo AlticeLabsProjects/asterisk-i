@@ -1,0 +1,18 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2021-10-13 15:44:12.134365955 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2021-10-13 18:15:18.910689080 +0100
+@@ -11788,9 +11788,11 @@
+ 
+ 	if (st_get_mode(pvt, 0) != SESSION_TIMER_MODE_REFUSE) {
+ 		strncat(supported, ", timer", sizeof(supported));
+-	} 
+-	if (ast_test_flag(&pvt->flags[2], SIP_PAGE3_PRACK)) {
+-		strncat(supported, ", 100rel", sizeof(supported));
++	}
++	if(!ast_test_flag(&pvt->flags[0], SIP_OUTGOING)){ 
++		if (ast_test_flag(&pvt->flags[2], SIP_PAGE3_PRACK)) {
++			strncat(supported, ", 100rel", sizeof(supported));
++		}
+ 	}
+ 	return add_header(req, "Supported", supported);
+ }
