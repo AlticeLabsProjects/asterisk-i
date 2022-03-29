@@ -1,0 +1,24 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2022-03-24 10:25:09.782313931 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2022-03-29 10:19:18.027211721 +0100
+@@ -260,17 +260,9 @@
+ 			ast_format_set(&rtp_alaw, AST_FORMAT_ALAW, 0);
+ 
+ 			if (ast_format_cmp(ast_channel_writeformat(chan), &rtp_alaw) == AST_FORMAT_CMP_NOT_EQUAL){
+-				 if (!ast_format_cap_iscompatible(ast_channel_nativeformats(chan), &rtp_alaw))
+-				 {
+-					 asr_cap = ast_format_cap_alloc();
+-					 ast_format_cap_add(asr_cap, &rtp_alaw);
+-					 //ast_format_cap_add(asr_cap, &rtp_ulaw);
+-
+-					 res = ast_translator_best_choice(asr_cap, ast_channel_nativeformats(chan), &rtp_alaw, &src);
+-					 if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
+-					 chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_alaw, &src);
+-				 }
+-			 }
++				if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
++				chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_alaw, ast_channel_writeformat(chan));
++			}
+ 		}
+ 	}
+ }
