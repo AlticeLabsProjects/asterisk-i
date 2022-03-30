@@ -1,6 +1,6 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
 --- asterisk-base-11.3.0/apps/wms_aux.c	2022-03-24 10:25:09.780313881 +0000
-+++ asterisk-11.3.0/apps/wms_aux.c	2022-03-30 12:12:52.692634697 +0100
++++ asterisk-11.3.0/apps/wms_aux.c	2022-03-30 16:49:22.997357978 +0100
 @@ -474,6 +474,12 @@
  	struct ast_frame *rtp_frame;
  	char digit, dtmf[64];
@@ -19,7 +19,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  		else if(rtp_frame->subclass.integer == AST_FORMAT_ALAW)
  			payload = 8;
 +		else
-+			ast_log(LOG_WARNING, "RTP frame is in the wrong format [%d] must rather be [%d] or [%d]\n", payload, AST_FORMAT_ALAW), AST_FORMAT_ULAW;
++			ast_log(LOG_WARNING, "RTP frame is in the wrong format [%d] must rather be [%d] or [%d] on ch %03d\n", payload, AST_FORMAT_ALAW, AST_FORMAT_ULAW, chan_vars->chan_id);
  		
  		// Default prediction
  			pred = chan_vars->asr.asr_lastts + ms * 8;
@@ -30,7 +30,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 -		if (sendto(chan_vars->asr.asr_sock, (void *)rtpheader, rtp_frame->datalen + hdrlen, 0, (struct sockaddr *) &chan_vars->asr.asr_serv_addr, sizeof(chan_vars->asr.asr_serv_addr)) < 0)
 -		ast_log(LOG_WARNING, "Unable to send audio packet to ASR server\n");
 +		if (sendto(chan_vars->asr.asr_sock, (void *)rtpheader, rtp_frame->datalen + hdrlen, 0, (struct sockaddr *) &chan_vars->asr.asr_serv_addr, sizeof(chan_vars->asr.asr_serv_addr)) < 0){
-+			ast_log(LOG_WARNING, "Unable to send audio packet to ASR server\n");
++			ast_log(LOG_WARNING, "Unable to send audio packet to ASR server on ch %03d\n", chan_vars->chan_id);
 +		}else if (chan_vars->asr.asr_rtp_seqno == 1) {
 +			getsockname(chan_vars->asr.asr_sock, (struct sockaddr*) &local_address, &addr_size);
 +			asr_server_port=ntohs(chan_vars->asr.asr_serv_addr.sin_port);
@@ -48,7 +48,7 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
  	{
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
 --- asterisk-base-11.3.0/apps/wms_inoapi.c	2022-03-24 10:25:09.782313931 +0000
-+++ asterisk-11.3.0/apps/wms_inoapi.c	2022-03-30 12:12:39.935402936 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2022-03-30 16:13:21.491257030 +0100
 @@ -238,13 +238,21 @@
     }
  	if (trs_cmd.asr != -1)
