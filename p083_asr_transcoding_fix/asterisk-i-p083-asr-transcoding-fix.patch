@@ -1,0 +1,95 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
+--- asterisk-base-11.3.0/apps/wms_aux.c	2022-03-30 12:27:47.901378688 +0100
++++ asterisk-11.3.0/apps/wms_aux.c	2022-03-30 12:42:44.472558864 +0100
+@@ -474,6 +474,12 @@
+ 	struct ast_frame *rtp_frame;
+ 	char digit, dtmf[64];
+ 
++	struct sockaddr_in local_address;
++	int addr_size = sizeof(local_address);
++	char asr_server_ip[INET_ADDRSTRLEN];
++	char asr_local_ip[INET_ADDRSTRLEN];
++	unsigned int asr_server_port, asr_local_port;
++
+    if (usr_frame == NULL || chan_vars == NULL) return;
+ 
+ 	if ((usr_frame->frametype != AST_FRAME_DTMF) && (usr_frame->frametype != AST_FRAME_VOICE)) return; // only send voice packets to ASR server
+@@ -514,6 +520,8 @@
+ 			payload = 0;
+ 		else if(rtp_frame->subclass.integer == AST_FORMAT_ALAW)
+ 			payload = 8;
++		else
++			ast_log(LOG_WARNING, "RTP frame is in the wrong format [%d] must rather be [%d] or [%d]\n", payload, AST_FORMAT_ALAW), AST_FORMAT_ULAW;
+ 		
+ 		// Default prediction
+ 			pred = chan_vars->asr.asr_lastts + ms * 8;
+@@ -575,8 +583,20 @@
+ 		rtpheader[1] = htonl(chan_vars->asr.asr_lastts);
+ 		rtpheader[2] = htonl(chan_vars->asr.asr_rtp_ssrc);
+ 
+-		if (sendto(chan_vars->asr.asr_sock, (void *)rtpheader, rtp_frame->datalen + hdrlen, 0, (struct sockaddr *) &chan_vars->asr.asr_serv_addr, sizeof(chan_vars->asr.asr_serv_addr)) < 0)
+-		ast_log(LOG_WARNING, "Unable to send audio packet to ASR server\n");
++		if (sendto(chan_vars->asr.asr_sock, (void *)rtpheader, rtp_frame->datalen + hdrlen, 0, (struct sockaddr *) &chan_vars->asr.asr_serv_addr, sizeof(chan_vars->asr.asr_serv_addr)) < 0){
++			ast_log(LOG_WARNING, "Unable to send audio packet to ASR server\n");
++		}else if (chan_vars->asr.asr_rtp_seqno == 1) {
++			getsockname(chan_vars->asr.asr_sock, (struct sockaddr*) &local_address, &addr_size);
++			asr_server_port=ntohs(chan_vars->asr.asr_serv_addr.sin_port);
++			asr_local_port=ntohs(local_address.sin_port);
++
++			inet_ntop( AF_INET, &chan_vars->asr.asr_serv_addr.sin_addr.s_addr, asr_server_ip, sizeof( asr_server_ip ));
++			inet_ntop( AF_INET, &local_address.sin_addr.s_addr, asr_local_ip, sizeof( asr_local_ip ));
++
++			if (option_verbose >= 3)
++				ast_verbose(VERBOSE_PREFIX_3 "Connection to ASR server - [%s:%u]->[%s:%u] on ch %03d\n", asr_local_ip, asr_local_port, asr_server_ip,asr_server_port, chan_vars->chan_id);
++		}
++
+ 	}
+ 	else if (usr_frame->frametype == AST_FRAME_DTMF)
+ 	{
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2022-03-30 12:27:47.904378741 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2022-03-30 12:45:41.749952424 +0100
+@@ -204,13 +204,21 @@
+    }
+ 	if (trs_cmd.asr != -1)
+ 	{
++      		if (chan_vars->asr.asr_sock > 2)
++		{
++			if (option_verbose >= 3) ast_verbose(VERBOSE_PREFIX_3 "Close ASR socket on ch %03d\n", trs_cmd.ch_index);
++			close(chan_vars->asr.asr_sock);
++			chan_vars->asr.asr_sock = -1;
++		}
++
+ 		if ((chan_vars->asr.asr_sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+ 		{
+-         ast_log(LOG_WARNING, "Couldn't create ASR socket on ch %03d\n", trs_cmd.ch_index);
++			ast_log(LOG_WARNING, "Couldn't create ASR socket on ch %03d\n", trs_cmd.ch_index);
+ 			chan_vars->asr.asr_sock = -1;
+ 		}
+ 		else
+ 		{
++			if (option_verbose >= 3) ast_verbose(VERBOSE_PREFIX_3 "ASR socket was opened on ch %03d\n", trs_cmd.ch_index);
+ 			memset(&chan_vars->asr.asr_serv_addr, 0, sizeof(chan_vars->asr.asr_serv_addr)); // Zero out structure  
+ 			chan_vars->asr.asr_serv_addr.sin_family = AF_INET; // Internet addr family  
+ 			chan_vars->asr.asr_serv_addr.sin_addr.s_addr = inet_addr(trs_cmd.asr_rattrib.server_ip); // Server IP address  
+@@ -226,17 +234,9 @@
+ 			ast_format_set(&rtp_alaw, AST_FORMAT_ALAW, 0);
+ 
+ 			if (ast_format_cmp(ast_channel_writeformat(chan), &rtp_alaw) == AST_FORMAT_CMP_NOT_EQUAL){
+-				 if (!ast_format_cap_iscompatible(ast_channel_nativeformats(chan), &rtp_alaw))
+-				 {
+-					 asr_cap = ast_format_cap_alloc();
+-					 ast_format_cap_add(asr_cap, &rtp_alaw);
+-					 //ast_format_cap_add(asr_cap, &rtp_ulaw);
+-
+-					 res = ast_translator_best_choice(asr_cap, ast_channel_nativeformats(chan), &rtp_alaw, &src);
+-					 if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
+-					 chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_alaw, &src);
+-				 }
+-			 }
++				if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
++				chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_alaw, ast_channel_writeformat(chan));
++			}
+ 		}
+ 	}
+ }
