@@ -1,0 +1,121 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2022-05-10 04:47:14.027286849 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2022-05-17 17:01:05.993761787 +0100
+@@ -15090,51 +15090,68 @@
+ 
+ 	ourport = (p->fromdomainport) ? p->fromdomainport : ast_sockaddr_port(&p->oursipip);
+ 
+-	if (p->owner && !ast_strlen_zero(ast_channel_cid_ani(p->owner)))
++  //Set P-Asserted-Identity
++  if (p->owner && !ast_strlen_zero(ast_channel_cid_asserted_id(p->owner)))
++  {
++     if (strchr(ast_channel_cid_asserted_id(p->owner), '\"'))
++        // Build P-Asserted-Identity
++        snprintf(asserted_id, sizeof(asserted_id), "%s%s", ast_channel_cid_asserted_id(p->owner), urioptions);
++     else if (strchr(ast_channel_cid_asserted_id(p->owner), '@'))
++     {
++        if (!sip_standard_port(p->socket.type, ourport))
++           // Build P-Asserted-Identity
++           snprintf(asserted_id, sizeof(asserted_id), "<sip:%s:%d%s>",
++                 ast_channel_cid_asserted_id(p->owner), ourport, urioptions);
++        else
++           // Build P-Asserted-Identity
++           snprintf(asserted_id, sizeof(asserted_id), "<sip:%s%s>", ast_channel_cid_asserted_id(p->owner), urioptions);
++     }
++     else
++     {
++        if (!sip_standard_port(p->socket.type, ourport) && ast_strlen_zero(p->fromdomain))
++           snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s:%d%s>", n, l, d, ourport, urioptions);
++        else
++           snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s%s>", n, l, d, urioptions);
++     }
++     if (sip_debug_test_pvt(p))
++        ast_verbose("Setting P-Asserted-Identity: to ANI value %s\n", asserted_id );
++  }
++
++  //Verify if Privacy is set and build From
++	if (p->owner && !ast_strlen_zero(ast_channel_cid_privacy(p->owner)))
++  {
++     if (!sip_standard_port(p->socket.type, ourport) && ast_strlen_zero(p->fromdomain))
++       snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d%s>;tag=%s", CALLERID_UNKNOWN, CALLERID_UNKNOWN, FROMDOMAIN_INVALID, ourport, urioptions, p->tag);
++     else
++       snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s%s>;tag=%s", CALLERID_UNKNOWN, CALLERID_UNKNOWN, FROMDOMAIN_INVALID, urioptions, p->tag);
++     if (sip_debug_test_pvt(p))
++       ast_verbose("Setting From: to ANI value %s\n", from);
++  }
++  else if (p->owner && !ast_strlen_zero(ast_channel_cid_ani(p->owner)) && ast_strlen_zero(ast_channel_cid_privacy(p->owner)))	
+ 	{
+ 	   // prepare for "teste" <sip:ola@ola.pt>
+ 	   if (strchr(ast_channel_cid_ani(p->owner), '\"'))
+-	   {
+ 	      // if (ourport != STANDARD_SIP_PORT) then WMS must comply with that!
+ 	      // Build From:
+-	      snprintf(from, sizeof(from), "%s%s;tag=%s", ast_channel_cid_ani(p->owner), urioptions, p->tag);
+-	      // Build P-Asserted-Identity
+-	      snprintf(asserted_id, sizeof(asserted_id), "%s%s", ast_channel_cid_ani(p->owner), urioptions);
+-	   }
++	      snprintf(from, sizeof(from), "%s;tag=%s", ast_channel_cid_ani(p->owner), p->tag);
+ 	   else if (strchr(ast_channel_cid_ani(p->owner), '@'))
+ 	   {
+ 	      if (!sip_standard_port(p->socket.type, ourport))
+-	      {
+ 	         // Build From:
+-	         snprintf(from, sizeof(from), "<sip:%s:%d%s>;tag=%s", ast_channel_cid_ani(p->owner), ourport,
+-	               urioptions, p->tag);
+-	         // Build P-Asserted-Identity
+-	         snprintf(asserted_id, sizeof(asserted_id), "<sip:%s:%d%s>",
+-	               ast_channel_cid_ani(p->owner), ourport, urioptions);
+-	      }
++	         snprintf(from, sizeof(from), "<sip:%s:%d>;tag=%s", ast_channel_cid_ani(p->owner), ourport, p->tag);
+ 	      else
+-	      {
+ 	         // Build From:
+-	         snprintf(from, sizeof(from), "<sip:%s%s>;tag=%s", ast_channel_cid_ani(p->owner), urioptions, p->tag);
+-	         // Build P-Asserted-Identity
+-	         snprintf(asserted_id, sizeof(asserted_id), "<sip:%s%s>", ast_channel_cid_ani(p->owner), urioptions);
+-	      }
++	         snprintf(from, sizeof(from), "<sip:%s>;tag=%s", ast_channel_cid_ani(p->owner), p->tag);
+ 	   }
+ 	   else
+ 	   {
+ 	      if (!sip_standard_port(p->socket.type, ourport) && ast_strlen_zero(p->fromdomain))
+-	      {
+-	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d%s>;tag=%s", n, l, d, ourport, urioptions, p->tag);
+-	         snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s:%d%s>", n, l, d, ourport, urioptions);
+-	      }
++	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, d, ourport, p->tag);
+ 	      else
+-	      {
+-	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s%s>;tag=%s", n, l, d, urioptions, p->tag);
+-	         snprintf(asserted_id, sizeof(asserted_id), "\"%s\" <sip:%s@%s%s>", n, l, d, urioptions);
+-	      }
++	         snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, d, p->tag);
+ 	   }
+ 	   if (sip_debug_test_pvt(p))
+-	      ast_verbose("Setting From: and P-Asserted-Identity: to ANI value %s\n", from);
++	      ast_verbose("Setting From: to ANI value %s\n", from);
+ 	}
+ 	else {
+ 
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
+--- asterisk-base-11.3.0/main/channel.c	2022-05-10 04:47:14.050298121 +0100
++++ asterisk-11.3.0/main/channel.c	2022-05-17 17:00:17.797717836 +0100
+@@ -5733,13 +5733,18 @@
+ 		connected.id.name.str = (char *) cid_name;
+ 		connected.id.name.presentation = AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
+ 	}
++
+ 	ast_channel_set_connected_line(chan, &connected, NULL);
+ 
+ 	if (origparm != NULL) {
+ 	   if (origparm->callerid[0] != '\0') {
+ 	      if (ast_channel_cid_ani(chan))
++        {
+ 	         free(ast_channel_cid_ani(chan));
++	         free(ast_channel_cid_asserted_id(chan));
++        }
+ 	      ast_channel_cid_ani_set(chan, ast_strdup(origparm->callerid));
++	      ast_channel_cid_asserted_id_set(chan, ast_strdup(origparm->callerid));
+ 	   }
+ 	   ast_channel_extradata_set(chan, origparm->extradata);
+ 
