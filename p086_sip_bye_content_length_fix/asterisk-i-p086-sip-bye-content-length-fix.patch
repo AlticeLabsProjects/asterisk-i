@@ -1,0 +1,21 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2022-07-05 14:39:25.368491090 +0100
++++ asterisk-11.3.0/apps/wms_inoapi.c	2022-07-05 14:40:09.728568009 +0100
+@@ -386,6 +386,7 @@
+  *****************************************************************************/
+ void release_endpoint(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars)
+ {
++   char bye_body[256];
+    if (option_verbose >= 3)
+       ast_verbose(VERBOSE_PREFIX_3 "Release on channel %s\n", ast_channel_name(chan));
+ 
+@@ -404,7 +405,8 @@
+       }
+       if (strlen(trs_cmd.al_char_val1) > 0 )
+       {
+-         ast_channel_bye_msg_body_set(chan, trs_cmd.al_char_val1);
++         snprintf(bye_body, sizeof(bye_body), "%s\r\n", trs_cmd.al_char_val1);
++         ast_channel_bye_msg_body_set(chan, bye_body);
+       }
+       if (trs_cmd.al_int_val2 >= 100)
+          ast_channel_hangupcause_set(chan, trs_cmd.al_int_val2);
