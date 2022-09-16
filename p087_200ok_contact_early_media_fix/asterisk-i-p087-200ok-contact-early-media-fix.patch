@@ -1,0 +1,22 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2022-09-13 10:46:12.342599496 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2022-09-16 10:41:38.445985153 +0100
+@@ -14823,6 +14823,7 @@
+ 		if (!p->autoframing && !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+ 			ast_debug(1, "Setting framing from config on incoming call\n");
+ 			ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(p->rtp), p->rtp, &p->prefs);
++
+ 		}
+ 		ast_rtp_instance_activate(p->rtp);
+ 		try_suggested_sip_codec(p);
+@@ -14838,6 +14839,10 @@
+ 		ast_log(LOG_ERROR, "Can't add SDP to response, since we have no RTP session allocated. Call-ID %s\n", p->callid);
+ 	if (reliable && !p->pendinginvite)
+ 		p->pendinginvite = seqno;		/* Buggy clients sends ACK on RINGING too */
++
++	ast_debug(1, "Add Contact Header\n");
++	add_header(&resp, "Contact", p->our_contact);
++
+ 	add_required_respheader(&resp);
+ 	return send_response(p, &resp, reliable, seqno);
+ }
