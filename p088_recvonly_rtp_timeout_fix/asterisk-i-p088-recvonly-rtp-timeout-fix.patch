@@ -1,0 +1,15 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2022-09-16 14:49:51.974398070 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2022-09-19 12:17:12.450937924 +0100
+@@ -31079,6 +31079,11 @@
+ 		for video? It really does belong to the RTP structure.
+ 	*/
+ 
++	/* Check OFFER ANSWER */
++	if(ast_test_flag(&dialog->flags[2], SIP_PAGE3_OFFER_ANSWER) == SIP_PAGE3_OFFER_ANSWER_SENDONLY){
++		ast_debug(4, "Channel: %s - Stream was marked as sendonly in the answer so no need to check the RTP timeout\n", ast_channel_name(dialog->owner));
++		return CMP_MATCH;
++	}
+ 	/* Check AUDIO RTP timers */
+ 	if (dialog->lastrtprx && (timeout || hold_timeout) && (t > dialog->lastrtprx + timeout)) {
+ 		if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD) || (hold_timeout && (t > dialog->lastrtprx + hold_timeout))) {
