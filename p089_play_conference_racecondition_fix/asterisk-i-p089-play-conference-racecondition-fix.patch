@@ -1,0 +1,75 @@
+diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/bridging.c asterisk-11.3.0/main/bridging.c
+--- asterisk-base-11.3.0/main/bridging.c	2022-12-14 05:52:50.850000000 -0500
++++ asterisk-11.3.0/main/bridging.c	2023-01-06 10:13:39.220000000 -0500
+@@ -972,23 +972,27 @@
+    cap = ast_format_cap_destroy(cap);
+ 
+    ast_channel_internal_bridge_set(playback_chan, bridge_channel->bridge);
++   ast_debug(1, "Playback channel created %p\n", playback_chan);
+ 
+    if (ast_call(playback_chan, "pseudo", 0)) {
++      ast_debug(1, "Hangup playback channel %p\n", playback_chan);
+       ast_hangup(playback_chan);
+       playback_chan = NULL;
+       pthread_exit(0);
+    }
+ 
+    underlying_channel = ast_channel_tech(playback_chan)->bridged_channel(playback_chan, NULL);
++   ast_debug(1, "Underlying channel created %p\n", underlying_channel);
+ 
+    ast_stopstream(playback_chan);
+ 
++
+    if (!ast_strlen_zero(ast_channel_conf_playann(bridge_channel->chan))) {
+       res = ast_streamfile(playback_chan, ast_channel_conf_playann(bridge_channel->chan), ast_channel_language(playback_chan));
+       if (!res) {
+          while(ast_channel_stream(playback_chan))
+          {
+-            if (!bridge_channel->chan || ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY))
++            if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT || !bridge_channel->chan || ast_test_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY))
+             {
+                ast_stopstream(playback_chan);
+                break;
+@@ -1038,17 +1042,33 @@
+       }
+    }
+ 
+-   ao2_lock(bridge_channel->bridge);
+-   ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
+-   ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAYING);
+-   ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAY_ENDED);
+-   ao2_unlock(bridge_channel->bridge);
+-
+-   if(bridge_channel->bridge && underlying_channel)
+-   {
+-      ast_bridge_depart(bridge_channel->bridge, underlying_channel);
++   if(bridge_channel && bridge_channel->bridge && (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT || bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END)){
++      if(!ao2_lock(bridge_channel->bridge))
++      {
++         if(bridge_channel->chan && !ast_channel_lock(bridge_channel->chan)){
++            ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_STOP_PLAY);
++            ast_clear_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAYING);
++            ast_set_flag(ast_channel_inoflags(bridge_channel->chan), CONF_PLAY_ENDED);
++            ast_channel_unlock(bridge_channel->chan);
++         }       
++         ao2_unlock(bridge_channel->bridge);
++       }
++    
++       if(bridge_channel && bridge_channel->bridge && underlying_channel)
++       {
++          ast_debug(1, "Depart underlying channel %p from bridge %p\n", underlying_channel, bridge_channel);
++          ast_bridge_depart(bridge_channel->bridge, underlying_channel);
++       }
++   }
++
++   if(playback_chan){
++      ast_debug(1, "Hangup playback channel %p\n", playback_chan);
+       ast_hangup(playback_chan);
+       playback_chan = NULL;
++   }
++
++   if(underlying_channel){
++      ast_debug(1, "Hangup underlying channel %p\n", underlying_channel);
+       ast_hangup(underlying_channel);
+       underlying_channel = NULL;
+    }
