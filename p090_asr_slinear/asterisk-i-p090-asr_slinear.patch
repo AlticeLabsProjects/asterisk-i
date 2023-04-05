@@ -1,0 +1,45 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
+--- asterisk-base-11.3.0/apps/wms_aux.c	2023-03-20 10:19:47.691744400 +0000
++++ asterisk-11.3.0/apps/wms_aux.c	2023-03-21 14:54:06.349207000 +0000
+@@ -520,6 +520,8 @@
+ 			payload = 0;
+ 		else if(rtp_frame->subclass.integer == AST_FORMAT_ALAW)
+ 			payload = 8;
++		else if(rtp_frame->subclass.integer == AST_FORMAT_SLINEAR)
++			payload = 11;
+ 		else
+ 			ast_log(LOG_WARNING, "RTP frame is in the wrong format [%d] must rather be [%d] or [%d] on ch %03d\n", payload, AST_FORMAT_ALAW, AST_FORMAT_ULAW, chan_vars->chan_id);
+ 		
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2023-03-20 10:19:47.681744400 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2023-04-05 09:00:54.268656500 +0000
+@@ -226,8 +226,7 @@
+  *****************************************************************************/
+ void attach_capabilities(struct ast_channel *chan, cmd_ast trs_cmd, ast_vars *chan_vars)
+ {
+-	struct ast_format rtp_ulaw;
+-	struct ast_format rtp_alaw;
++	struct ast_format rtp_codec;
+ 	struct ast_format_cap *asr_cap;
+ 	struct ast_format src;
+ 	int res;
+@@ -264,12 +263,15 @@
+ 
+ 			gettimeofday(&chan_vars->asr.asr_txcore, NULL);
+ 
+-			//ast_format_set(&rtp_ulaw, AST_FORMAT_ULAW, 0);
+-			ast_format_set(&rtp_alaw, AST_FORMAT_ALAW, 0);
++			if(trs_cmd.asr == 2){ //unimrcp client
++				ast_format_set(&rtp_codec, AST_FORMAT_SLINEAR, 0);
++			}else{ //windless-mrcp client
++				ast_format_set(&rtp_codec, AST_FORMAT_ALAW, 0);
++			}
+ 
+-			if (ast_format_cmp(ast_channel_writeformat(chan), &rtp_alaw) == AST_FORMAT_CMP_NOT_EQUAL){
++			if (ast_format_cmp(ast_channel_writeformat(chan), &rtp_codec) == AST_FORMAT_CMP_NOT_EQUAL){
+ 				if (chan_vars->asr.asr_writetrans) ast_translator_free_path(chan_vars->asr.asr_writetrans);
+-				chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_alaw, ast_channel_writeformat(chan));
++				chan_vars->asr.asr_writetrans = ast_translator_build_path(&rtp_codec, ast_channel_writeformat(chan));
+ 			}
+ 		}
+ 	}
