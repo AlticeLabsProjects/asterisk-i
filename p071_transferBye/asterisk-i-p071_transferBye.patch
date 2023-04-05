@@ -1,21 +1,4 @@
 diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject -Naur asterisk-base-11.3.0/main/channel.c asterisk-11.3.0/main/channel.c
-<<<<<<< HEAD
---- asterisk-base-11.3.0/main/channel.c	2020-06-21 19:31:30.822001593 +0100
-+++ asterisk-11.3.0/main/channel.c	2020-06-21 10:26:17.672001674 +0100
-@@ -6147,15 +6147,6 @@
- 		res = ast_waitfor(chan, -1);
- 
- 		if (res < 0 || !(fr = ast_read(chan))) {
--			if (!fr || ((fr->frametype == AST_FRAME_CONTROL) && (fr->subclass.integer == AST_CONTROL_HANGUP))) {
--				if (fr) 
--				{
--					ast_frfree(fr);
--				}
--				res = 1;
--				ast_debug(2, "Hangup of channel %s detected in transfer, lets assume success\n", ast_channel_name(chan));
--				break;
--			}
-=======
 --- asterisk-base-11.3.0/main/channel.c	2020-06-23 03:47:13.697001745 +0100
 +++ asterisk-11.3.0/main/channel.c	2020-06-23 03:43:33.385001743 +0100
 @@ -6147,6 +6147,15 @@
@@ -31,7 +14,6 @@ diff --exclude='*.xml' --exclude='*.o.d' --exclude=.project --exclude=.cproject 
 +				ast_debug(2, "Hangup of channel %s detected in transfer, lets assume success\n", ast_channel_name(chan));
 +				break;
 +			}
->>>>>>> 2.8
  			res = -1;
  			break;
  		}
