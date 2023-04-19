@@ -1,0 +1,35 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2023-04-05 11:43:16.743534394 +0100
++++ asterisk-11.3.0/channels/chan_sip.c	2023-04-19 23:27:12.176931406 +0100
+@@ -17,7 +17,7 @@
+  */
+ 
+ /*
+- * Changed by Luis Reis - PT Inovação, SA
++ * Changed by Luis Reis - PT Inovacao, SA
+  *
+  *    Added support for:
+  *
+@@ -12351,7 +12351,11 @@
+ 			snprintf(contact, sizeof(contact), "%s%s%s;expires=%d", brackets ? "" : "<", contact_uri, brackets ? "" : ">", p->expiry);
+ 			add_header(resp, "Contact", contact);	/* Not when we unregister */
+ 		}
+-	} else if (!ast_strlen_zero(p->our_contact) && resp_needs_contact(msg, p->method)) {
++        } else if (!ast_strlen_zero(p->our_contact) && resp_needs_contact(msg, p->method)) {		
++		add_header(resp, "Contact", p->our_contact);
++	} else if (!ast_strlen_zero(p->our_contact) && ( msg[0] == '2' && req->method == SIP_INVITE )) {		
++		/* this condition was added to solve an early media scenary. The 200 to the INVITE was not including contact header becouse the p->method has the last processed method, witch is PRACK  */
++		ast_log(LOG_DEBUG, "Add Contact header in 200OK response for SIP_INVITE\n");
+ 		add_header(resp, "Contact", p->our_contact);
+ 	}
+ 
+@@ -14840,9 +14844,6 @@
+ 	if (reliable && !p->pendinginvite)
+ 		p->pendinginvite = seqno;		/* Buggy clients sends ACK on RINGING too */
+ 
+-	ast_debug(1, "Add Contact Header\n");
+-	add_header(&resp, "Contact", p->our_contact);
+-
+ 	add_required_respheader(&resp);
+ 	return send_response(p, &resp, reliable, seqno);
+ }
