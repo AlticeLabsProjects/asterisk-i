@@ -6,7 +6,7 @@ diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproje
     chan_vars->conf_thread = AST_PTHREADT_NULL;
     chan_vars->fax_thread = AST_PTHREADT_NULL;
 +   chan_vars->icall_thread = AST_PTHREADT_NULL;
-+   chan_vars->conenct_call_thread = AST_PTHREADT_NULL;
++   chan_vars->connect_call_thread = AST_PTHREADT_NULL;
  
  	/* --> */
  	if (strchr((char *)data,'#') == NULL)	// INBOUND CALL
