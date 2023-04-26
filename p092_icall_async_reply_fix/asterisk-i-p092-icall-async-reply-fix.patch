@@ -1,0 +1,319 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/app_wms.c asterisk-11.3.0/apps/app_wms.c
+--- asterisk-base-11.3.0/apps/app_wms.c	2023-04-26 13:55:11.989895300 +0000
++++ asterisk-11.3.0/apps/app_wms.c	2023-04-26 14:23:54.519895300 +0000
+@@ -167,6 +167,8 @@
+    snprintf(chan_vars->trs_reply.body.channelId, sizeof(chan_vars->trs_reply.body.channelId), ast_channel_name(chan));
+    chan_vars->conf_thread = AST_PTHREADT_NULL;
+    chan_vars->fax_thread = AST_PTHREADT_NULL;
++   chan_vars->icall_thread = AST_PTHREADT_NULL;
++   chan_vars->connect_call_thread = AST_PTHREADT_NULL;
+ 
+ 	/* --> */
+ 	if (strchr((char *)data,'#') == NULL)	// INBOUND CALL
+@@ -449,6 +451,18 @@
+       chan_vars->conf_thread = AST_PTHREADT_NULL;
+    }
+ 
++   if(chan_vars->icall_thread != AST_PTHREADT_NULL)
++   {
++      pthread_join(chan_vars->icall_thread, NULL);
++      chan_vars->icall_thread = AST_PTHREADT_NULL;
++   }
++
++   if(chan_vars->connect_call_thread != AST_PTHREADT_NULL)
++   {
++      pthread_join(chan_vars->connect_call_thread, NULL);
++      chan_vars->connect_call_thread = AST_PTHREADT_NULL;
++   }
++
+    shutdown(trs_sock_fd, SHUT_RDWR);
+ 	close(trs_sock_fd);
+ 	trs_sock_fd = -1;
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/app_wms.h asterisk-11.3.0/apps/app_wms.h
+--- asterisk-base-11.3.0/apps/app_wms.h	2023-04-26 13:55:11.989895300 +0000
++++ asterisk-11.3.0/apps/app_wms.h	2023-04-26 14:15:27.929895300 +0000
+@@ -120,6 +120,8 @@
+       unsigned short max_baudrate;           // maximum transmission baud rate (2400 to 14400)
+    } fax;
+    pthread_t fax_thread;
++   pthread_t icall_thread;
++   pthread_t connect_call_thread;
+ } ast_vars;
+ 
+ #endif
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2023-04-26 13:55:11.969895300 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2023-04-26 14:41:31.389895300 +0000
+@@ -82,6 +82,8 @@
+ static void *conference_thread(void *);
+ static void *send_fax_thread(void *);
+ static void *receive_fax_thread(void *);
++static void *accept_icall_thread(void *);
++static void *connect_call_thread(void *);
+ static struct ast_channel *wait_for_answer(struct ast_channel *, struct inast_localuser *, int *);
+ static struct ast_channel *get_rtsp_chan(struct ast_channel *, char *);
+ 
+@@ -128,6 +130,8 @@
+ 	               ast_verbose(VERBOSE_PREFIX_3 "Sending session progress(%s) on ch %03d\n", ast_channel_name(chan), trs_cmd.ch_index);
+       ast_indicate(chan, AST_CONTROL_PROGRESS);
+       chan_vars->early_media = ast_tvnow();
++
++      ast_set_flag(ast_channel_icall_flags(chan), ICALL_WAIT_PRACK);
+ 	}
+    else 
+    {
+@@ -140,13 +144,97 @@
+          asteriskSendReply(&trs_reply, chan_vars);
+          return;
+       }
++
++      ast_set_flag(ast_channel_icall_flags(chan), ICALL_WAIT_ACK);
+    }   
+ 	chan_vars->trs_reply.con_id = trs_cmd.con_id;
+ 	chan_vars->trs_reply.sender = trs_cmd.edp_id;
+-	
+-	asteriskSendReply(&trs_reply, chan_vars);
++
++   if (ast_pthread_create_background(&chan_vars->icall_thread, NULL, accept_icall_thread, chan_vars) < 0)
++   {
++      ast_log(LOG_WARNING, "Thread creation ERROR |%s| for async accept icall event %d on ch %03d - %s\n", strerror(errno), trs_cmd.al_int_val2, trs_cmd.ch_index, ast_channel_name(chan));
++      asteriskSendReply(&trs_reply, chan_vars);
++   }
++}
++
++/******************************************************************************
++ *        NAME: accept_icall_thread()
++ * DESCRIPTION: thread function, it is necessary to create a new thread because
++ *              we want to send event ACCEPT_ICALL_COMPLETED when UAC reply 
++ *              with ACK to 200OK
++ *****************************************************************************/
++static void *accept_icall_thread(void *data)
++{
++   reply_ast trs_reply;
++   ast_vars *chan_vars;
++   chan_vars = (ast_vars *) data;
++
++   ast_log(LOG_DEBUG, "accept_icall_thread - thread was created\n");
++
++   memset(&trs_reply, 0, sizeof(reply_ast));
++   trs_reply.cmd_cnt = chan_vars->trs_reply.cmd_cnt;
++   trs_reply.con_id = chan_vars->trs_reply.con_id;
++   trs_reply.sender = chan_vars->trs_reply.sender;
++   trs_reply.event = ACCEPT_ICALL_COMPLETED;
++
++
++   //Wait for ACK reply to 200 OK or PRACK to 183
++   while(!chan_vars->shutdown)
++   {
++      if(ast_channel_lock(chan_vars->chan) == -1)
++      {
++         ast_log(LOG_ERROR, "accept_icall_thread - Can't lock chan on ch %03d\n", chan_vars->chan_id);
++         trs_reply.error = TRUE;
++         trs_reply.body.error_value = TASKFAIL_ERROR;
++
++         asteriskSendReply(&trs_reply, chan_vars);
++         return NULL;
++      }
++
++      if(!(ast_channel_state(chan_vars->chan) == AST_STATE_UP) && !(ast_channel_state(chan_vars->chan) == AST_STATE_RING)){
++         ast_log(LOG_WARNING, "accept_icall_thread - Channel state is wrong (%d) - (%s) on ch %03d\n", ast_channel_state(chan_vars->chan), ast_channel_name(chan_vars->chan), chan_vars->chan_id);
++         trs_reply.error = TRUE;
++         trs_reply.body.error_value = TASKFAIL_ERROR;
++
++         ast_channel_unlock(chan_vars->chan);
++
++         asteriskSendReply(&trs_reply, chan_vars);
++         break;
++      }else if(ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_ACK) && 
++               ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_ACK)){
++
++         ast_log(LOG_DEBUG, "accept_icall_thread - We receive ACK - ast state [%d]\n", ast_channel_state(chan_vars->chan));
++         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_ACK);
++         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_ACK);
++
++         ast_channel_unlock(chan_vars->chan);
++
++         asteriskSendReply(&trs_reply, chan_vars);
++         
++         break;
++      }else if(ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_PRACK) &&
++               ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_PRACK)){
++
++         ast_log(LOG_DEBUG, "accept_icall_thread - We receive PRACK - ast state [%d]\n", ast_channel_state(chan_vars->chan));
++         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_PRACK);
++         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_PRACK);
++
++         ast_channel_unlock(chan_vars->chan);
++
++         asteriskSendReply(&trs_reply, chan_vars);
++        
++         break;
++      }
++
++      ast_channel_unlock(chan_vars->chan);
++
++      usleep(10000); //10ms
++   }
++
++   ast_log(LOG_DEBUG, "accept_icall_thread - The Thread ended\n");
+ }
+ 
++
+ /******************************************************************************
+  *        NAME: connect_call()
+  * DESCRIPTION: 
+@@ -182,7 +270,78 @@
+          return;
+       }
+    }
+-	asteriskSendReply(&trs_reply, chan_vars);
++
++   ast_set_flag(ast_channel_icall_flags(chan), ICALL_WAIT_ACK);
++
++   if (ast_pthread_create_background(&chan_vars->connect_call_thread, NULL, connect_call_thread, chan_vars) < 0)
++   {
++      ast_log(LOG_WARNING, "Thread creation ERROR |%s| for async accept icall event %d on ch %03d - %s\n", strerror(errno), trs_cmd.al_int_val2, trs_cmd.ch_index, ast_channel_name(chan));
++      asteriskSendReply(&trs_reply, chan_vars);
++   }
++}
++
++
++/******************************************************************************
++ *        NAME: connect_call_thread()
++ * DESCRIPTION: thread function, it is necessary to create a new thread because
++ *              we want to send event CONNECT_CALL_COMPLETED when UAC reply 
++ *              with ACK to 200OK
++ *****************************************************************************/
++static void *connect_call_thread(void *data)
++{
++   reply_ast trs_reply;
++   ast_vars *chan_vars;
++   chan_vars = (ast_vars *) data;
++
++   ast_log(LOG_DEBUG, "connect_call_thread - thread was created\n");
++
++   memset(&trs_reply, 0, sizeof(reply_ast));
++   trs_reply.cmd_cnt = chan_vars->trs_reply.cmd_cnt;
++   trs_reply.con_id = chan_vars->trs_reply.con_id;
++   trs_reply.sender = chan_vars->trs_reply.sender;
++   trs_reply.event = CONNECT_CALL_COMPLETED;
++
++
++   //Wait for ACK reply to 200 OK
++   while(!chan_vars->shutdown)
++   {
++      if(ast_channel_lock(chan_vars->chan) == -1)
++      {
++         ast_log(LOG_ERROR, "connect_call_thread - Can't lock chan on ch %03d\n", chan_vars->chan_id);
++         trs_reply.error = TRUE;
++         trs_reply.body.error_value = TASKFAIL_ERROR;
++
++         asteriskSendReply(&trs_reply, chan_vars);
++         return NULL;
++      }
++
++      if(ast_channel_state(chan_vars->chan) != AST_STATE_UP){
++         ast_log(LOG_WARNING, "connect_call_thread - Channel state is wrong (%d) - (%s) on ch %03d\n", ast_channel_state(chan_vars->chan), ast_channel_name(chan_vars->chan), chan_vars->chan_id);
++         trs_reply.error = TRUE;
++         trs_reply.body.error_value = TASKFAIL_ERROR;
++
++         ast_channel_unlock(chan_vars->chan);
++
++         asteriskSendReply(&trs_reply, chan_vars);
++         break;
++      }else if(ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_ACK) &&
++               ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_ACK)){
++         ast_log(LOG_DEBUG, "connect_call_thread - We receive ACK - ast state [%d]\n", ast_channel_state(chan_vars->chan));
++         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_ACK);
++         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_ACK);
++
++         ast_channel_unlock(chan_vars->chan);
++         
++         asteriskSendReply(&trs_reply, chan_vars);
++         break;
++      }
++
++      ast_channel_unlock(chan_vars->chan);
++
++      usleep(10000); //10ms
++   }
++
++   ast_log(LOG_DEBUG, "connect_call_thread - The Thread ended\n");
+ }
+ 
+ /******************************************************************************
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2023-04-26 13:55:11.689895300 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2023-04-26 14:32:28.989895300 +0000
+@@ -30505,12 +30505,25 @@
+ 		break;
+ 	case SIP_PRACK:
+ 		res = handle_request_prack(p, req);
++
++		if(p->owner){ 
++			if(p->invitestate == INV_EARLY_MEDIA){
++				ast_log(LOG_DEBUG, "handle_incoming - Set ICALL_RCV_PRACK flag\n");
++				ast_set_flag(ast_channel_icall_flags(p->owner), ICALL_RCV_PRACK);
++			}
++		}
+ 		break;
+ 	case SIP_ACK:
+ 		/* Make sure we don't ignore this */
+ 		if (seqno == p->pendinginvite) {
+ 			p->invitestate = INV_TERMINATED;
+ 			p->pendinginvite = 0;
++
++			if(p->owner){
++				ast_log(LOG_DEBUG, "handle_incoming - Set ICALL_RCV_ACK flag\n");
++				ast_set_flag(ast_channel_icall_flags(p->owner), ICALL_RCV_ACK);
++			}
++			
+ 			acked = __sip_ack(p, seqno, 1 /* response */, 0, 0);
+ 			if (find_sdp(req)) {
+ 				if (process_sdp(p, req, SDP_T38_NONE)) {
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2023-04-26 13:55:11.659895300 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2023-04-26 14:34:12.129895300 +0000
+@@ -215,6 +215,12 @@
+ #define CONF_REC_PAUSE        (1 << 3)
+ #define CONF_REC_RESUME       (1 << 4)
+ 
++/* Specific flags to support async reply for events ACCEPT_ICALL_COMPLETED and CONNECT_CALL_COMPLETED */
++#define ICALL_WAIT_ACK        (1 << 1)
++#define ICALL_WAIT_PRACK      (1 << 2)
++#define ICALL_RCV_ACK         (1 << 3)
++#define ICALL_RCV_PRACK       (1 << 4)
++
+ 
+ enum ast_bridge_result {
+ 	AST_BRIDGE_COMPLETE = 0,
+@@ -3970,6 +3976,7 @@
+ char *ast_channel_info_msg_body(const struct ast_channel *chan);
+ void ast_channel_info_msg_body_set(struct ast_channel *chan, const char *value);
+ struct ast_flags *ast_channel_conf_rec_flags(const struct ast_channel *chan);
++struct ast_flags *ast_channel_icall_flags(const struct ast_channel *chan);
+ struct ast_flags *ast_channel_inoflags(const struct ast_channel *chan);
+ int ast_channel_charge_type(const struct ast_channel *chan);
+ void ast_channel_charge_type_set(struct ast_channel *chan, int value);
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/main/channel_internal_api.c asterisk-11.3.0/main/channel_internal_api.c
+--- asterisk-base-11.3.0/main/channel_internal_api.c	2023-04-26 13:55:12.029895300 +0000
++++ asterisk-11.3.0/main/channel_internal_api.c	2023-04-26 14:42:02.849895300 +0000
+@@ -224,6 +224,7 @@
+ 
+ 	char info_msg_body[AST_MAX_PARAMS];		/*!< Message body for SIP INFO - For user defined protocols */
+ 	struct ast_flags conf_rec_flags;		/*!< ConfBridge flags for recording operations */
++	struct ast_flags icall_flags;			/*!< icall flags for sending ACCEPT_ICALL_COMPLETED or CONNECT_CALL_COMPLETED event when ACK or PRACK was replied*/
+ 
+ 	int transfer_extradata;				/*!< If there is extra data (i.e. SIP headers) for the REFER request */
+ };
+@@ -890,6 +891,10 @@
+ {
+    return &(chan->conf_rec_flags);
+ }
++struct ast_flags *ast_channel_icall_flags(const struct ast_channel *chan)
++{
++   return &(chan->icall_flags);
++}
+ struct ast_flags *ast_channel_inoflags(const struct ast_channel *chan)
+ {
+    return &(chan->inoflags);
