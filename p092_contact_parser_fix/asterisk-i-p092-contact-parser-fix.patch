@@ -1,0 +1,165 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/channels/sip/reqresp_parser.c asterisk-11.3.0/channels/sip/reqresp_parser.c
+--- asterisk-base-11.3.0/channels/sip/reqresp_parser.c	2023-08-23 11:10:16.887282100 +0000
++++ asterisk-11.3.0/channels/sip/reqresp_parser.c	2023-08-23 11:11:01.017282100 +0000
+@@ -1013,6 +1013,74 @@
+ 	return -1;
+ }
+ 
++// int get_in_brackets_full(char *tmp,char **out,char **residue)
++// {
++// 	const char *parse = tmp;
++// 	char *first_bracket;
++// 	char *second_bracket;
++
++// 	if (out) {
++// 		*out = "";
++// 	}
++// 	if (residue) {
++// 		*residue = "";
++// 	}
++
++// 	if (ast_strlen_zero(tmp)) {
++// 		return 1;
++// 	}
++
++// 	/*
++// 	 * Skip any quoted text until we find the part in brackets.
++// 	* On any error give up and return -1
++// 	*/
++// 	while ( (first_bracket = strchr(parse, '<')) ) {
++// 		char *first_quote = strchr(parse, '"');
++// 		first_bracket++;
++// 		if (!first_quote || first_quote >= first_bracket) {
++// 			break; /* no need to look at quoted part */
++// 		}
++// 		/* the bracket is within quotes, so ignore it */
++// 		parse = find_closing_quote(first_quote + 1, NULL);
++// 		if (!*parse) {
++// 			ast_log(LOG_WARNING, "No closing quote found in '%s'\n", tmp);
++// 			return  -1;
++// 		}
++// 		parse++;
++// 	}
++
++// 	/* If no first bracket then still look for a second bracket as some other parsing functions
++// 	may overwrite first bracket with NULL when terminating a token based display-name. As this
++// 	only affects token based display-names there is no danger of brackets being in quotes */
++// 	if (first_bracket) {
++// 		parse = first_bracket;
++// 	} else {
++// 		parse = tmp;
++// 	}
++
++// 	if ((second_bracket = strchr(parse, '>'))) {
++// 		*second_bracket++ = '\0';
++// 		if (out) {
++// 			*out = (char *) parse;
++// 		}
++// 		if (residue) {
++// 			*residue = second_bracket;
++// 		}
++// 		return 0;
++// 	}
++
++// 	if ((first_bracket)) {
++// 		ast_log(LOG_WARNING, "No closing bracket found in '%s'\n", tmp);
++// 		return -1;
++// 	}
++
++// 	if (out) {
++// 		*out = tmp;
++// 	}
++
++// 	return 1;
++// }
++
+ int get_in_brackets_full(char *tmp,char **out,char **residue)
+ {
+ 	const char *parse = tmp;
+@@ -1030,50 +1098,51 @@
+ 		return 1;
+ 	}
+ 
+-	/*
+-	 * Skip any quoted text until we find the part in brackets.
+-	* On any error give up and return -1
+-	*/
+-	while ( (first_bracket = strchr(parse, '<')) ) {
+-		char *first_quote = strchr(parse, '"');
+-		first_bracket++;
+-		if (!first_quote || first_quote >= first_bracket) {
+-			break; /* no need to look at quoted part */
+-		}
+-		/* the bracket is within quotes, so ignore it */
++    //Strip initial spaces
++    while(*parse == ' ') parse++;
++    
++    //Skip quoted text (display name)
++    if(*parse=='"'){
++        char *first_quote=(char *)parse;
++        /* the bracket is within quotes, so ignore it */
+ 		parse = find_closing_quote(first_quote + 1, NULL);
+ 		if (!*parse) {
+ 			ast_log(LOG_WARNING, "No closing quote found in '%s'\n", tmp);
+ 			return  -1;
+ 		}
+ 		parse++;
+-	}
+-
+-	/* If no first bracket then still look for a second bracket as some other parsing functions
+-	may overwrite first bracket with NULL when terminating a token based display-name. As this
+-	only affects token based display-names there is no danger of brackets being in quotes */
+-	if (first_bracket) {
+-		parse = first_bracket;
+-	} else {
+-		parse = tmp;
+-	}
+-
+-	if ((second_bracket = strchr(parse, '>'))) {
+-		*second_bracket++ = '\0';
+-		if (out) {
++    }
++    
++    //Strip initial spaces
++    while(*parse == ' ') parse++;
++    if(*parse=='<'){
++        parse++;
++        char *closed_bracket;
++        char *aux_parse = (char *)parse;
++        while(closed_bracket = strchr(aux_parse, '>')) {
++            //Thjis close bracket belong to open bracket?
++            char *open_bracket = strchr(aux_parse, '<');
++            if(!open_bracket || closed_bracket < open_bracket){
++                *closed_bracket++ = '\0';
++                if (out) {
++			        *out = (char *) parse;
++		        }
++		        if (residue) {
++			        *residue = second_bracket;
++		        }
++		        return 0;
++            }
++            
++            aux_parse = closed_bracket;
++            aux_parse++;
++        }
++        
++        if (out) {
+ 			*out = (char *) parse;
+ 		}
+-		if (residue) {
+-			*residue = second_bracket;
+-		}
+ 		return 0;
+-	}
+-
+-	if ((first_bracket)) {
+-		ast_log(LOG_WARNING, "No closing bracket found in '%s'\n", tmp);
+-		return -1;
+-	}
+-
++    }
++    
+ 	if (out) {
+ 		*out = tmp;
+ 	}
