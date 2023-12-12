@@ -1,0 +1,21 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
+--- asterisk-base-11.3.0/apps/wms_aux.c	2023-12-12 12:18:07.101702400 +0000
++++ asterisk-11.3.0/apps/wms_aux.c	2023-12-12 12:20:07.151702400 +0000
+@@ -9,7 +9,7 @@
+  * $History: $
+  * 
+  * Luis Reis
+- * Copyright (c) 2006 PT Inovação SA. All Rights Reserved
++ * Copyright (c) 2006 PT Inovaï¿½ï¿½o SA. All Rights Reserved
+  ******************************************************************************/
+ 
+  /*******************************************************************************
+@@ -596,7 +596,7 @@
+ 			if (option_verbose >= 3)
+ 				ast_verbose(VERBOSE_PREFIX_3 "Connection to ASR server - [%s:%u]->[%s:%u] on ch %03d\n", asr_local_ip, asr_local_port, asr_server_ip,asr_server_port, chan_vars->chan_id);
+ 		}
+-
++		ast_frfree(rtp_frame);
+ 	}
+ 	else if (usr_frame->frametype == AST_FRAME_DTMF)
+ 	{
