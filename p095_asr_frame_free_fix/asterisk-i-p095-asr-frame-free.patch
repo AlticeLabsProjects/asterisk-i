@@ -1,0 +1,34 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/wms_aux.c asterisk-11.3.0/apps/wms_aux.c
+--- asterisk-base-11.3.0/apps/wms_aux.c	2024-01-04 09:51:32.131342700 +0000
++++ asterisk-11.3.0/apps/wms_aux.c	2024-01-04 09:55:46.361342700 +0000
+@@ -472,6 +472,7 @@
+ 	unsigned int ms;
+ 	struct timeval now;
+ 	struct ast_frame *rtp_frame;
++	struct ast_frame *rtp_transcoding=NULL;
+ 	char digit, dtmf[64];
+ 
+ 	struct sockaddr_in local_address;
+@@ -491,7 +492,12 @@
+ 	}
+ 	if (usr_frame->frametype == AST_FRAME_VOICE)
+ 	{
+-		if (chan_vars->asr.asr_writetrans) rtp_frame = ast_translate(chan_vars->asr.asr_writetrans, usr_frame, 0);
++		if (chan_vars->asr.asr_writetrans){
++			rtp_frame = ast_translate(chan_vars->asr.asr_writetrans, usr_frame, 0);
++			rtp_transcoding=rtp_frame;
++		}else{
++			rtp_frame = usr_frame;
++		}
+ 
+ 		else rtp_frame = usr_frame;
+ 
+@@ -596,7 +602,7 @@
+ 			if (option_verbose >= 3)
+ 				ast_verbose(VERBOSE_PREFIX_3 "Connection to ASR server - [%s:%u]->[%s:%u] on ch %03d\n", asr_local_ip, asr_local_port, asr_server_ip,asr_server_port, chan_vars->chan_id);
+ 		}
+-		ast_frfree(rtp_frame);
++		if(rtp_transcoding) ast_frfree(rtp_transcoding);
+ 	}
+ 	else if (usr_frame->frametype == AST_FRAME_DTMF)
+ 	{
