@@ -1,0 +1,127 @@
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/apps/wms_inoapi.c asterisk-11.3.0/apps/wms_inoapi.c
+--- asterisk-base-11.3.0/apps/wms_inoapi.c	2024-01-15 17:10:59.080000000 +0000
++++ asterisk-11.3.0/apps/wms_inoapi.c	2024-01-16 09:50:17.696186800 +0000
+@@ -9,7 +9,7 @@
+  * $History: $
+  * 
+  * Luis Reis
+- * Copyright (c) 2006 PT Inovação SA. All Rights Reserved
++ * Copyright (c) 2006 PT Inovaï¿½ï¿½o SA. All Rights Reserved
+  ******************************************************************************/
+ 
+  /*******************************************************************************
+@@ -124,6 +124,9 @@
+ 
+    ast_log(LOG_DEBUG, "InoAPI says Charge %d\n", trs_cmd.al_int_val2);
+ 
++   chan_vars->trs_reply.con_id = trs_cmd.con_id;
++	chan_vars->trs_reply.sender = trs_cmd.edp_id;
++
+ 	if (trs_cmd.al_int_val1 == ACCEPT)
+ 	{
+ 	   if (option_verbose >= 3)
+@@ -131,7 +134,12 @@
+       ast_indicate(chan, AST_CONTROL_PROGRESS);
+       chan_vars->early_media = ast_tvnow();
+ 
+-      ast_set_flag(ast_channel_icall_flags(chan), ICALL_WAIT_PRACK);
++      // Fix WMS-2317 - In calls with early media, 
++		// the response to WMS service must not wait for PRACK
++      //ast_set_flag(ast_channel_icall_flags(chan), ICALL_WAIT_PRACK);
++
++      asteriskSendReply(&trs_reply, chan_vars);
++      return;
+ 	}
+    else 
+    {
+@@ -147,8 +155,6 @@
+ 
+       ast_set_flag(ast_channel_icall_flags(chan), ICALL_WAIT_ACK);
+    }   
+-	chan_vars->trs_reply.con_id = trs_cmd.con_id;
+-	chan_vars->trs_reply.sender = trs_cmd.edp_id;
+ 
+    if (ast_pthread_create_background(&chan_vars->icall_thread, NULL, accept_icall_thread, chan_vars) < 0)
+    {
+@@ -212,19 +218,23 @@
+          asteriskSendReply(&trs_reply, chan_vars);
+          
+          break;
+-      }else if(ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_PRACK) &&
+-               ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_PRACK)){
++      }
++      // Fix WMS-2317 - In calls with early media, 
++		// the response to WMS service must not wait for PRACK
+ 
+-         ast_log(LOG_DEBUG, "accept_icall_thread - We receive PRACK - ast state [%d]\n", ast_channel_state(chan_vars->chan));
+-         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_PRACK);
+-         ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_PRACK);
++      // else if(ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_PRACK) &&
++      //          ast_test_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_PRACK)){
+ 
+-         ast_channel_unlock(chan_vars->chan);
++      //    ast_log(LOG_DEBUG, "accept_icall_thread - We receive PRACK - ast state [%d]\n", ast_channel_state(chan_vars->chan));
++      //    ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_WAIT_PRACK);
++      //    ast_clear_flag(ast_channel_icall_flags(chan_vars->chan), ICALL_RCV_PRACK);
+ 
+-         asteriskSendReply(&trs_reply, chan_vars);
++      //    ast_channel_unlock(chan_vars->chan);
++
++      //    asteriskSendReply(&trs_reply, chan_vars);
+         
+-         break;
+-      }
++      //    break;
++      // }
+ 
+       ast_channel_unlock(chan_vars->chan);
+ 
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/channels/chan_sip.c asterisk-11.3.0/channels/chan_sip.c
+--- asterisk-base-11.3.0/channels/chan_sip.c	2024-01-15 17:10:58.950000000 +0000
++++ asterisk-11.3.0/channels/chan_sip.c	2024-01-16 09:50:04.486186800 +0000
+@@ -30506,12 +30506,15 @@
+ 	case SIP_PRACK:
+ 		res = handle_request_prack(p, req);
+ 
+-		if(p->owner){ 
+-			if(p->invitestate == INV_EARLY_MEDIA){
+-				ast_log(LOG_DEBUG, "handle_incoming - Set ICALL_RCV_PRACK flag\n");
+-				ast_set_flag(ast_channel_icall_flags(p->owner), ICALL_RCV_PRACK);
+-			}
+-		}
++		// Fix WMS-2317 - In calls with early media, 
++		// the response to WMS service must not wait for PRACK, 
++		// so we comment code below
++		// if(p->owner){ 
++		// 	if(p->invitestate == INV_EARLY_MEDIA){
++		// 		ast_log(LOG_DEBUG, "handle_incoming - Set ICALL_RCV_PRACK flag\n");
++		// 		ast_set_flag(ast_channel_icall_flags(p->owner), ICALL_RCV_PRACK);
++		// 	}
++		// }
+ 		break;
+ 	case SIP_ACK:
+ 		/* Make sure we don't ignore this */
+diff '--exclude=*.xml' '--exclude=*.o.d' '--exclude=.project' '--exclude=.cproject' -Naur asterisk-base-11.3.0/include/asterisk/channel.h asterisk-11.3.0/include/asterisk/channel.h
+--- asterisk-base-11.3.0/include/asterisk/channel.h	2024-01-15 17:10:58.940000000 +0000
++++ asterisk-11.3.0/include/asterisk/channel.h	2024-01-16 09:49:38.176186800 +0000
+@@ -217,9 +217,9 @@
+ 
+ /* Specific flags to support async reply for events ACCEPT_ICALL_COMPLETED and CONNECT_CALL_COMPLETED */
+ #define ICALL_WAIT_ACK        (1 << 1)
+-#define ICALL_WAIT_PRACK      (1 << 2)
++//#define ICALL_WAIT_PRACK      (1 << 2) Fix WMS-2317
+ #define ICALL_RCV_ACK         (1 << 3)
+-#define ICALL_RCV_PRACK       (1 << 4)
++//#define ICALL_RCV_PRACK       (1 << 4) Fix WMS-2317
+ 
+ 
+ enum ast_bridge_result {
+@@ -479,7 +479,7 @@
+  * PSTN gateway).
+  *
+  * \todo Implement settings for transliteration between UTF8 Caller ID names in
+- *       to ASCII Caller ID's (DAHDI). Östen Åsklund might be transliterated into
++ *       to ASCII Caller ID's (DAHDI). ï¿½sten ï¿½sklund might be transliterated into
+  *       Osten Asklund or Oesten Aasklund depending upon language and person...
+  *       We need automatic routines for incoming calls and static settings for
+  *       our own accounts.
